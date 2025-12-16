@@ -6,6 +6,20 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+# 在导入其他模块之前加载.env文件
+try:
+    from dotenv import load_dotenv
+    # 查找项目根目录下的.env文件
+    project_root = Path(__file__).parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        # 注意：此时logger还未初始化，使用print或延迟日志记录
+        # 如果.env文件存在，会在Config类初始化时记录日志
+except ImportError:
+    # 如果没有安装python-dotenv，跳过
+    pass
+
 logger = logging.getLogger(__name__)
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 @dataclass
@@ -932,3 +932,4 @@ def execute_jobs(jobs: Sequence[StageJob], max_parallel: int) -> List[tuple[Stag
 
 if __name__ == "__main__":
     main()
+

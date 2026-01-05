@@ -352,10 +352,22 @@ def parse_json_response(response: str) -> dict:
     Returns:
         解析后的字典
     """
-    # 尝试提取 JSON 部分（可能被 markdown 代码块包裹）
+    import re
+    
+    original_response = response
     response = response.strip()
     
-    # 如果被 ```json 或 ``` 包裹，提取内容
+    # 策略1: 尝试查找 markdown 代码块中的 JSON（```json 或 ```）
+    code_block_pattern = r'```(?:json)?\s*\n(.*?)\n```'
+    match = re.search(code_block_pattern, response, re.DOTALL)
+    if match:
+        json_str = match.group(1).strip()
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass  # 继续尝试其他策略
+    
+    # 策略2: 如果整个响应以 ``` 开头和结尾，提取内容
     if response.startswith("```"):
         lines = response.split("\n")
         # 跳过第一行（```json 或 ```）
@@ -363,17 +375,35 @@ def parse_json_response(response: str) -> dict:
         # 找到最后一个 ``` 的位置
         end_idx = len(lines) - 1
         if lines[end_idx].strip() == "```":
-            response = "\n".join(lines[start_idx:end_idx])
+            json_str = "\n".join(lines[start_idx:end_idx]).strip()
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass  # 继续尝试其他策略
     
+    # 策略3: 尝试直接解析整个响应
     try:
         return json.loads(response)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON 解析失败: {e}")
-        logger.error(f"响应长度: {len(response)} 字符")
-        # 记录响应前后各 500 字符（如果响应较长）
-        if len(response) > 1000:
-            logger.error(f"响应内容（前500字符）: {response[:500]}")
-            logger.error(f"响应内容（后500字符）: {response[-500:]}")
-        else:
-            logger.error(f"响应内容: {response}")
-        raise
+    except json.JSONDecodeError:
+        pass  # 继续尝试其他策略
+    
+    # 策略4: 尝试查找第一个 { 和最后一个 } 之间的内容
+    first_brace = response.find('{')
+    last_brace = response.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        json_str = response[first_brace:last_brace + 1]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass  # 所有策略都失败
+    
+    # 所有策略都失败，记录错误并抛出异常
+    logger.error(f"JSON 解析失败: 无法从响应中提取有效的 JSON")
+    logger.error(f"响应长度: {len(original_response)} 字符")
+    # 记录响应前后各 500 字符（如果响应较长）
+    if len(original_response) > 1000:
+        logger.error(f"响应内容（前500字符）: {original_response[:500]}")
+        logger.error(f"响应内容（后500字符）: {original_response[-500:]}")
+    else:
+        logger.error(f"响应内容: {original_response}")
+    raise json.JSONDecodeError("无法从响应中提取有效的 JSON", original_response, 0)

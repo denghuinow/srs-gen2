@@ -12,11 +12,11 @@ openai:
     model: "deepseek-chat"  # 默认使用的 Chat 模型
     temperature: 1.0  # 温度参数
     max_tokens: 8192  # 可选，None 时使用 API 默认值
-    max_continuations: 8  # 最大接续次数（当响应被截断时）
+    max_continuations: 0  # 最大接续次数（当响应被截断时）
   
   # Embedding 模型配置
   embedding:
-    model: "Qwen/Qwen3-Embedding-8B"  # 默认使用的 Embedding 模型
+    model: "Qwen/Qwen3-Embedding-0.6B"  # 默认使用的 Embedding 模型
   
   # OpenAI API 调用重试设置
   retry:
@@ -70,4 +70,9 @@ logging:
 prompt:
   # 提示词语言（zh 或 en），默认为 en
   language: "en"
+
+# Token 生成配置
+max_context_length: 131072  # 最大上下文长度
+one_gen_req_token: 4096  # 单次生成需求的目标 token 数
+# maxToken 使用现有的 openai.chat.max_tokens 或 openai.components.requirement_explorer.max_tokens
 

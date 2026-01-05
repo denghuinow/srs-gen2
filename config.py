@@ -191,6 +191,16 @@ class Config:
         """获取提示词语言（zh 或 en）"""
         return self.get("prompt.language", "en")
     
+    @property
+    def max_context_length(self) -> Optional[int]:
+        """获取最大上下文长度"""
+        return self.get("max_context_length")
+    
+    @property
+    def one_gen_req_token(self) -> Optional[int]:
+        """获取单次生成需求的目标 token 数"""
+        return self.get("one_gen_req_token")
+    
     def get_component_model(self, component_name: str) -> str:
         """
         获取指定组件的模型配置

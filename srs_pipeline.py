@@ -105,6 +105,39 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot_product / (norm_a * norm_b)
 
 
+def _is_similar_to_any(
+    candidate: SemanticUnit,
+    existing_units: List[SemanticUnit],
+    threshold: float,
+) -> bool:
+    """
+    检查候选需求是否与已有需求列表中的任何需求相似
+    
+    Args:
+        candidate: 候选需求
+        existing_units: 已有需求列表
+        threshold: 相似度阈值
+    
+    Returns:
+        如果相似度 >= threshold，返回 True；否则返回 False
+    """
+    # 为候选需求计算向量（如果还没有）
+    if candidate.vector is None:
+        candidate.vector = get_embedding(candidate.text)
+    
+    # 检查与已有需求的相似度
+    for existing in existing_units:
+        # 为已有需求计算向量（如果还没有）
+        if existing.vector is None:
+            existing.vector = get_embedding(existing.text)
+        
+        similarity = cosine_similarity(candidate.vector, existing.vector)
+        if similarity >= threshold:
+            return True
+    
+    return False
+
+
 def split_to_semantic_units(d_base: str) -> List[SemanticUnit]:
     """
     将基线 SRS 文档拆分为语义单元
@@ -157,20 +190,34 @@ def split_to_semantic_units(d_base: str) -> List[SemanticUnit]:
 def requirement_explorer(
     r_base: str,
     negative_pool: List[SemanticUnit],
-    required_num: int,
+    input_tokens: int,
+    max_context_length: int,
+    one_gen_req_token: int,
+    max_token: Optional[int],
 ) -> List[SemanticUnit]:
     """
-    探索新需求
+    探索新需求（基于 token 数的迭代生成）
     
     Args:
         r_base: 需求基础文档
         negative_pool: 已有需求列表（负样本）
-        required_num: 目标新增条数
+        input_tokens: 当前 prompt 的 token 数
+        max_context_length: 最大上下文长度
+        one_gen_req_token: 单次生成需求的目标 token 数
+        max_token: 最大 token 数限制（从配置获取，可能为 None）
     
     Returns:
-        新探索的语义单元列表
+        新探索的语义单元列表（已计算 token_count）
     """
-    logger.info(f"开始探索新需求，目标数量: {required_num}")
+    logger.info(f"开始探索新需求，input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}")
+    
+    # 计算目标 token 数
+    if max_token is not None:
+        target_tokens = min(max_context_length - input_tokens, one_gen_req_token, max_token)
+    else:
+        target_tokens = min(max_context_length - input_tokens, one_gen_req_token)
+    
+    logger.info(f"目标 token 数: {target_tokens}")
     
     # 加载模板
     template = load_prompt_template("requirement_explorer")
@@ -179,40 +226,291 @@ def requirement_explorer(
     negative_texts = [unit.text for unit in negative_pool]
     negative_pool_text = "\n".join(negative_texts)
     
-    # 替换占位符
+    # 替换占位符（不再使用 REQUIRED_NUM）
     prompt = template.replace("{{R_BASE}}", r_base)
     prompt = prompt.replace("{{NEGATIVE_POOL}}", negative_pool_text)
-    prompt = prompt.replace("{{REQUIRED_NUM}}", str(required_num))
+    # 移除 REQUIRED_NUM 占位符（如果存在）
+    if "{{REQUIRED_NUM}}" in prompt:
+        prompt = prompt.replace("{{REQUIRED_NUM}}", "")
     
     # 获取组件特定的模型和温度配置
     model = config.get_component_model("requirement_explorer")
     temperature = config.get_component_temperature("requirement_explorer")
-    max_tokens = config.get_component_max_tokens("requirement_explorer")
     max_continuations = config.get_component_max_continuations("requirement_explorer")
     
-    def _invoke():
-        response = call_llm(
-            prompt,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            max_continuations=max_continuations,
-        )
-        unit_texts = _parse_req_prefixed_lines(response)
-        units_local = []
-        for text in unit_texts:
-            unit = SemanticUnit(
-                text=text,
-                grade=None,
-                vector=None,
+    # 迭代生成逻辑
+    current_tokens = 0
+    unique_units = []
+    # 获取相似度阈值
+    similarity_threshold = config.similarity_threshold
+    
+    # 为 negative_pool 中的需求准备向量（用于相似度检查）
+    for unit in negative_pool:
+        if unit.vector is None:
+            unit.vector = get_embedding(unit.text)
+    
+    for iteration in range(5):
+        logger.info(f"[requirement_explorer 迭代] 第 {iteration + 1}/5 次，当前 token 数: {current_tokens}/{target_tokens}")
+        
+        def _invoke():
+            # 调用 LLM，将 target_tokens 作为 max_tokens 传入
+            response = call_llm(
+                prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=target_tokens,  # 使用计算出的 target_tokens
+                max_continuations=max_continuations,
             )
-            units_local.append(unit)
-        return units_local
+            unit_texts = _parse_req_prefixed_lines(response)
+            
+            # 去掉最后一条需求（避免不完整）
+            if len(unit_texts) > 0:
+                unit_texts = unit_texts[:-1]
+                logger.info(f"[requirement_explorer 迭代] 生成 {len(unit_texts)} 条需求（已移除最后一条）")
+            
+            units_local = []
+            for text in unit_texts:
+                unit = SemanticUnit(
+                    text=text,
+                    grade=None,
+                    vector=None,
+                    token_count=None,
+                )
+                # 计算 token 数
+                unit.calculate_token_count()
+                units_local.append(unit)
+            return units_local
+        
+        try:
+            generated = _run_with_component_retry("requirement_explorer", _invoke)
+        except Exception as e:
+            logger.error(f"[requirement_explorer 迭代] 第 {iteration + 1} 次迭代失败: {e}")
+            if iteration == 0:
+                # 第一次迭代失败，直接返回空列表
+                return []
+            # 其他迭代失败，使用已有结果
+            break
+        
+        # 使用相似度检查去重并累计 token
+        new_units_this_iter = []
+        duplicate_count = 0
+        for unit in generated:
+            # 检查与 negative_pool 和本次迭代已生成需求的相似度
+            all_existing = negative_pool + unique_units
+            if not _is_similar_to_any(unit, all_existing, similarity_threshold):
+                unique_units.append(unit)
+                if unit.token_count is not None:
+                    current_tokens += unit.token_count
+                new_units_this_iter.append(unit)
+            else:
+                duplicate_count += 1
+        
+        if duplicate_count > 0:
+            logger.info(f"[requirement_explorer 迭代] 本次生成 {len(generated)} 条需求，其中 {duplicate_count} 条相似（与已有需求或本次迭代重复，相似度阈值: {similarity_threshold}），新增 {len(new_units_this_iter)} 条未重复需求，累计 token 数: {current_tokens}/{target_tokens}")
+        else:
+            logger.info(f"[requirement_explorer 迭代] 本次新增 {len(new_units_this_iter)} 条未重复需求，累计 token 数: {current_tokens}/{target_tokens}")
+        
+        # 如果达到目标 token 数，停止迭代
+        if current_tokens >= target_tokens:
+            logger.info(f"[requirement_explorer 迭代] 已达到目标 token 数 ({current_tokens} >= {target_tokens})，停止迭代")
+            break
+        
+        # 第5次迭代如果未达到，允许计入部分相似需求补足（使用更宽松的阈值）
+        if iteration == 4 and current_tokens < target_tokens:
+            logger.info(f"[requirement_explorer 迭代] 第5次迭代仍未达到目标，当前 {current_tokens}/{target_tokens}，尝试补足...")
+            remaining = target_tokens - current_tokens
+            # 使用更宽松的相似度阈值（0.9）来补足
+            relaxed_threshold = 0.9
+            # 从本次生成的需求中，找出那些与已有需求池不相似，但与本次迭代已生成需求相似的需求
+            for unit in generated:
+                # 首先检查是否与已有需求池相似（使用原始阈值），如果相似则跳过
+                if _is_similar_to_any(unit, negative_pool, similarity_threshold):
+                    continue
+                
+                # 检查是否与本次迭代已生成的需求相似（使用更宽松的阈值）
+                if _is_similar_to_any(unit, unique_units, relaxed_threshold):
+                    # 与本次迭代内需求相似，但与已有需求池不相似，可以添加用于补足
+                    if unit.token_count is not None:
+                        if current_tokens + unit.token_count <= target_tokens + remaining * 0.1:  # 允许超出10%
+                            unique_units.append(unit)
+                            current_tokens += unit.token_count
+                            if current_tokens >= target_tokens:
+                                break
+            logger.info(f"[requirement_explorer 迭代] 补足后 token 数: {current_tokens}/{target_tokens}")
     
-    units = _run_with_component_retry("requirement_explorer", _invoke)
+    logger.info(f"[requirement_explorer] 迭代完成，共生成 {len(unique_units)} 个新需求，总 token 数: {current_tokens}/{target_tokens}")
+    return unique_units
+
+
+def requirement_improver(
+    positive_units: List[SemanticUnit],
+    negative_pool: List[SemanticUnit],
+    r_base: str,
+    input_tokens: int,
+    max_context_length: int,
+    one_gen_req_token: int,
+    max_token: Optional[int],
+) -> List[SemanticUnit]:
+    """
+    生成新需求和扩展积极需求（基于 token 数的迭代生成）
     
-    logger.info(f"成功探索出 {len(units)} 个新需求")
-    return units
+    Args:
+        positive_units: 积极需求列表（grade > 0），用于扩展
+        negative_pool: 负样本池（包含所有已有需求），用于避免重复和避免负分需求
+        r_base: 需求基础文档
+        input_tokens: 当前 prompt 的 token 数
+        max_context_length: 最大上下文长度
+        one_gen_req_token: 单次生成需求的目标 token 数
+        max_token: 最大 token 数限制（从配置获取，可能为 None）
+    
+    Returns:
+        新生成的语义单元列表（已计算 token_count）
+    """
+    logger.info(f"开始生成新需求和扩展积极需求，积极需求数量: {len(positive_units)}, 负样本池大小: {len(negative_pool)}, input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}")
+    
+    # 计算目标 token 数
+    if max_token is not None:
+        target_tokens = min(max_context_length - input_tokens, one_gen_req_token, max_token)
+    else:
+        target_tokens = min(max_context_length - input_tokens, one_gen_req_token)
+    
+    logger.info(f"目标 token 数: {target_tokens}")
+    
+    # 加载模板
+    template = load_prompt_template("requirement_improver")
+    
+    # 准备积极需求文本列表
+    positive_texts = [f"REQ: {unit.text}" for unit in positive_units]
+    positive_units_text = "\n".join(positive_texts) if positive_texts else "（暂无积极需求）"
+    
+    # 准备负样本池文本列表（只取 text）
+    negative_texts = [unit.text for unit in negative_pool]
+    negative_pool_text = "\n".join(negative_texts) if negative_texts else "（暂无已有需求）"
+    
+    # 替换占位符
+    prompt = template.replace("{{R_BASE}}", r_base)
+    prompt = prompt.replace("{{POSITIVE_UNITS}}", positive_units_text)
+    prompt = prompt.replace("{{NEGATIVE_POOL}}", negative_pool_text)
+    
+    # 获取组件特定的模型和温度配置
+    # 优先使用 requirement_improver 的配置，如果不存在则使用 requirement_explorer 的配置
+    if config.get("openai.components.requirement_improver.model") is not None:
+        model = config.get_component_model("requirement_improver")
+    else:
+        model = config.get_component_model("requirement_explorer")
+    
+    if config.get("openai.components.requirement_improver.temperature") is not None:
+        temperature = config.get_component_temperature("requirement_improver")
+    else:
+        temperature = config.get_component_temperature("requirement_explorer")
+    
+    if config.get("openai.components.requirement_improver.max_continuations") is not None:
+        max_continuations = config.get_component_max_continuations("requirement_improver")
+    else:
+        max_continuations = config.get_component_max_continuations("requirement_explorer")
+    
+    # 迭代生成逻辑
+    current_tokens = 0
+    unique_units = []
+    # 获取相似度阈值
+    similarity_threshold = config.similarity_threshold
+    
+    # 为 negative_pool 中的需求准备向量（用于相似度检查）
+    for unit in negative_pool:
+        if unit.vector is None:
+            unit.vector = get_embedding(unit.text)
+    
+    for iteration in range(5):
+        logger.info(f"[requirement_improver 迭代] 第 {iteration + 1}/5 次，当前 token 数: {current_tokens}/{target_tokens}")
+        
+        def _invoke():
+            # 调用 LLM，将 target_tokens 作为 max_tokens 传入
+            response = call_llm(
+                prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=target_tokens,  # 使用计算出的 target_tokens
+                max_continuations=max_continuations,
+            )
+            unit_texts = _parse_req_prefixed_lines(response)
+            
+            # 去掉最后一条需求（避免不完整）
+            if len(unit_texts) > 0:
+                unit_texts = unit_texts[:-1]
+                logger.info(f"[requirement_improver 迭代] 生成 {len(unit_texts)} 条新需求（已移除最后一条）")
+            
+            units_local = []
+            for text in unit_texts:
+                unit = SemanticUnit(
+                    text=text,
+                    grade=None,  # 改进后的需求需要重新评分
+                    vector=None,
+                    token_count=None,
+                )
+                # 计算 token 数
+                unit.calculate_token_count()
+                units_local.append(unit)
+            return units_local
+        
+        try:
+            generated = _run_with_component_retry("requirement_improver", _invoke)
+        except Exception as e:
+            logger.error(f"[requirement_improver 迭代] 第 {iteration + 1} 次迭代失败: {e}")
+            if iteration == 0:
+                # 第一次迭代失败，直接返回空列表
+                return []
+            # 其他迭代失败，使用已有结果
+            break
+        
+        # 使用相似度检查去重并累计 token
+        new_units_this_iter = []
+        duplicate_count = 0
+        for unit in generated:
+            # 检查与 negative_pool 和本次迭代已生成需求的相似度
+            all_existing = negative_pool + unique_units
+            if not _is_similar_to_any(unit, all_existing, similarity_threshold):
+                unique_units.append(unit)
+                if unit.token_count is not None:
+                    current_tokens += unit.token_count
+                new_units_this_iter.append(unit)
+            else:
+                duplicate_count += 1
+        
+        if duplicate_count > 0:
+            logger.info(f"[requirement_improver 迭代] 本次生成 {len(generated)} 条需求，其中 {duplicate_count} 条相似（与已有需求或本次迭代重复，相似度阈值: {similarity_threshold}），新增 {len(new_units_this_iter)} 条未重复新需求，累计 token 数: {current_tokens}/{target_tokens}")
+        else:
+            logger.info(f"[requirement_improver 迭代] 本次新增 {len(new_units_this_iter)} 条未重复新需求，累计 token 数: {current_tokens}/{target_tokens}")
+        
+        # 如果达到目标 token 数，停止迭代
+        if current_tokens >= target_tokens:
+            logger.info(f"[requirement_improver 迭代] 已达到目标 token 数 ({current_tokens} >= {target_tokens})，停止迭代")
+            break
+        
+        # 第5次迭代如果未达到，允许计入部分相似需求补足（使用更宽松的阈值）
+        if iteration == 4 and current_tokens < target_tokens:
+            logger.info(f"[requirement_improver 迭代] 第5次迭代仍未达到目标，当前 {current_tokens}/{target_tokens}，尝试补足...")
+            remaining = target_tokens - current_tokens
+            # 使用更宽松的相似度阈值（0.9）来补足
+            relaxed_threshold = 0.9
+            # 从本次生成的需求中，找出那些与已有需求池不相似，但与本次迭代已生成需求相似的需求
+            for unit in generated:
+                # 首先检查是否与已有需求池相似（使用原始阈值），如果相似则跳过
+                if _is_similar_to_any(unit, negative_pool, similarity_threshold):
+                    continue
+                
+                # 检查是否与本次迭代已生成的需求相似（使用更宽松的阈值）
+                if _is_similar_to_any(unit, unique_units, relaxed_threshold):
+                    # 与本次迭代内需求相似，但与已有需求池不相似，可以添加用于补足
+                    if unit.token_count is not None:
+                        if current_tokens + unit.token_count <= target_tokens + remaining * 0.1:  # 允许超出10%
+                            unique_units.append(unit)
+                            current_tokens += unit.token_count
+                            if current_tokens >= target_tokens:
+                                break
+            logger.info(f"[requirement_improver 迭代] 补足后 token 数: {current_tokens}/{target_tokens}")
+    
+    logger.info(f"[requirement_improver] 迭代完成，共生成 {len(unique_units)} 个新需求，总 token 数: {current_tokens}/{target_tokens}")
+    return unique_units
 
 
 def requirement_clarifier(

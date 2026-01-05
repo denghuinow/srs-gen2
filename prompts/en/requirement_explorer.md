@@ -14,10 +14,6 @@ The following requirements already exist. Please ensure that newly generated req
 
 {{NEGATIVE_POOL}}
 
-### Target Quantity
-
-Please generate up to {{REQUIRED_NUM}} new requirement descriptions.
-
 ## Requirements
 
 1. New requirements must be within the semantic scope of the requirement base document (R_base)
@@ -26,7 +22,7 @@ Please generate up to {{REQUIRED_NUM}} new requirement descriptions.
    - Specific and actionable
    - Semantically clear and independent
    - Related to the requirement base document
-4. Try to generate {{REQUIRED_NUM}} new requirements, but if it is truly impossible to generate more, you may generate fewer than this number
+4. Generate as many new requirements as possible, ensuring they are diverse and comprehensive
 
 ## Output Format
 

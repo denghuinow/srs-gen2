@@ -1,18 +1,21 @@
 # main.py
 import argparse
+import json
 import os
 import logging
 import math
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional
 from models import SemanticUnit
 from srs_pipeline import (
     split_to_semantic_units,
     requirement_explorer,
+    requirement_improver,
     requirement_clarifier,
     srs_generator,
-    filter_low_similarity,
 )
+from utils.token_counter import count_tokens
+from openai_utils import load_prompt_template
 from config import get_config
 
 # 获取配置
@@ -150,6 +153,66 @@ def merge_units(
     return list(unit_dict.values())
 
 
+def save_iteration_stats(
+    output_dir: str,
+    iter_num: int,
+    pool: List[SemanticUnit],
+    buffer_new_units: List[SemanticUnit],
+    improved_units_count: int = 0,
+) -> None:
+    """
+    保存迭代统计数据到JSON文件
+    
+    Args:
+        output_dir: 输出目录路径
+        iter_num: 迭代编号
+        pool: 需求池（包含所有grade的单元）
+        buffer_new_units: 本轮新探索的需求
+        improved_units_count: 改进的需求数量
+    """
+    # 计算统计数据
+    pool_size = len(pool)
+    semantic_units_count = len([u for u in pool if u.grade is not None and u.grade > 0])
+    new_units_count = len(buffer_new_units)
+    
+    # 构建统计数据
+    stats = {
+        "iter_num": iter_num,
+        "pool_size": pool_size,
+        "semantic_units_count": semantic_units_count,
+        "new_units_count": new_units_count,
+        "improved_units_count": improved_units_count,
+    }
+    
+    # JSON文件路径
+    stats_file = os.path.join(output_dir, "all_iter_stats.json")
+    
+    # 读取现有数据（如果存在）
+    all_stats = {}
+    if os.path.exists(stats_file):
+        try:
+            with open(stats_file, "r", encoding="utf-8") as f:
+                all_stats = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"读取统计数据文件失败，将创建新文件: {e}")
+            all_stats = {}
+    
+    # 确保iterations键存在
+    if "iterations" not in all_stats:
+        all_stats["iterations"] = {}
+    
+    # 更新当前迭代的统计数据
+    all_stats["iterations"][str(iter_num)] = stats
+    
+    # 写入文件
+    try:
+        with open(stats_file, "w", encoding="utf-8") as f:
+            json.dump(all_stats, f, ensure_ascii=False, indent=2)
+        logger.info(f"已保存第 {iter_num} 轮迭代统计数据到: {stats_file}")
+    except IOError as e:
+        logger.error(f"保存统计数据文件失败: {e}")
+
+
 def run_srs_iteration(
     d_orig: str,
     r_base: str,
@@ -226,48 +289,116 @@ def run_srs_iteration(
 
     while outer_iter <= max_outer_iter:
         logger.info("\n" + "=" * 60)
-        logger.info(f"[外循环] 第 {outer_iter} 轮迭代")
+        logger.info(f"[外循环] 第 {outer_iter}/{max_outer_iter} 轮迭代")
         logger.info("=" * 60)
 
-        buffer_new_units = []
-        inner_iter = 0
+        # 获取配置参数
+        max_context_length = config.max_context_length
+        one_gen_req_token = config.one_gen_req_token
+        max_token = config.get_component_max_tokens("requirement_explorer")
+        
+        if max_context_length is None:
+            raise ValueError("配置文件中缺少 max_context_length")
+        if one_gen_req_token is None:
+            raise ValueError("配置文件中缺少 one_gen_req_token")
 
-        # 内层循环：多次 explorer，尝试凑够 N 条 brand-new requirements
-        while len(buffer_new_units) < N and inner_iter < max_inner_iter:
-            logger.info(
-                f"\n[内循环] 第 {inner_iter + 1} 次探索（目标: {N} 条，当前: {len(buffer_new_units)} 条）"
-            )
-            # 至少探索10条新需求，否则容易出现探索不出新需求的情况
-            required_num = max(10, math.ceil(( N - len(buffer_new_units))*1.5))
-
-            # 合并 pool 和 buffer_new_units 作为负样本
-            negative_pool = merge_units(pool, buffer_new_units)
-
-            # 探索新需求
-            explored_units = requirement_explorer(
+        # 记录改进需求数量
+        improved_units_count = 0
+        buffer_improved_units = []
+        
+        # 后续轮次：先执行 requirement_improver（基于当前轮次开始时的需求池）
+        if outer_iter > 1:
+            logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：先执行需求生成，再执行需求探索")
+            # 筛选积极需求
+            positive_units = [u for u in pool if u.grade is not None and u.grade > 0]
+            # 使用整个 pool 作为 negative_pool（用于避免重复和避免负分需求）
+            negative_pool = pool
+            
+            logger.info(f"\n[步骤 2] 发现 {len(positive_units)} 个积极需求，开始生成新需求和扩展积极需求...")
+            
+            # 计算 input_tokens（用于 requirement_improver）
+            template_improver = load_prompt_template("requirement_improver")
+            positive_texts = [f"REQ: {unit.text}" for unit in positive_units]
+            positive_units_text = "\n".join(positive_texts) if positive_texts else "（暂无积极需求）"
+            negative_texts = [unit.text for unit in negative_pool]
+            negative_pool_text = "\n".join(negative_texts) if negative_texts else "（暂无已有需求）"
+            
+            prompt_improver = template_improver.replace("{{R_BASE}}", r_base)
+            prompt_improver = prompt_improver.replace("{{POSITIVE_UNITS}}", positive_units_text)
+            prompt_improver = prompt_improver.replace("{{NEGATIVE_POOL}}", negative_pool_text)
+            
+            messages_improver = [{"role": "user", "content": prompt_improver}]
+            input_tokens_improver = count_tokens(messages_improver)
+            if input_tokens_improver is None:
+                logger.warning("无法计算 requirement_improver 的 input_tokens，使用估算值")
+                input_tokens_improver = int(len(prompt_improver) * 0.25)
+            
+            # 获取 max_token（优先使用 requirement_improver 的配置）
+            max_token_improver = config.get_component_max_tokens("requirement_improver")
+            if max_token_improver is None:
+                max_token_improver = max_token
+            
+            # 调用 requirement_improver（即使没有积极需求，也可以生成新需求）
+            improved_units = requirement_improver(
+                positive_units,
+                negative_pool,
                 r_base,
-                negative_pool,
-                required_num,
+                input_tokens_improver,
+                max_context_length,
+                one_gen_req_token,
+                max_token_improver,
             )
+            
+            if len(improved_units) > 0:
+                # requirement_improver 内部已经使用相似度检查去重，无需再次过滤
+                buffer_improved_units = improved_units
+                improved_units_count = len(buffer_improved_units)
+                logger.info(f"生成完成，共生成 {len(improved_units)} 个新需求（已在迭代过程中进行相似度去重）")
+            else:
+                buffer_improved_units = []
+                logger.warning("未生成任何新需求")
 
-            # 过滤相似需求（使用配置文件中的阈值）
-            brand_new_units = filter_low_similarity(
-                explored_units,
-                negative_pool,
-            )
+        # requirement_explorer 内部已经处理了迭代逻辑（最多5次），这里只需要调用一次
+        if outer_iter == 1:
+            logger.info("\n[第一轮] 跳过需求改进，直接执行需求探索")
+        logger.info("\n[步骤 2.5] 探索新需求...")
 
-            # 合并到 buffer
-            buffer_new_units = merge_units(buffer_new_units, brand_new_units)
+        # 使用 pool 作为负样本
+        negative_pool = pool
 
-            logger.info(
-                f"本轮探索获得 {len(brand_new_units)} 条新需求，buffer 当前大小: {len(buffer_new_units)}"
-            )
+        # 计算 input_tokens
+        template = load_prompt_template("requirement_explorer")
+        negative_texts = [unit.text for unit in negative_pool]
+        negative_pool_text = "\n".join(negative_texts)
+        prompt = template.replace("{{R_BASE}}", r_base)
+        prompt = prompt.replace("{{NEGATIVE_POOL}}", negative_pool_text)
+        if "{{REQUIRED_NUM}}" in prompt:
+            prompt = prompt.replace("{{REQUIRED_NUM}}", "")
+        
+        messages = [{"role": "user", "content": prompt}]
+        input_tokens = count_tokens(messages)
+        if input_tokens is None:
+            logger.warning("无法计算 input_tokens，使用估算值")
+            # 粗略估算：每个字符约 0.25 token
+            input_tokens = int(len(prompt) * 0.25)
+        
+        logger.info(f"计算得到 input_tokens: {input_tokens}")
 
-            inner_iter += 1
+        # 探索新需求（基于 token 数，内部会迭代最多5次）
+        explored_units = requirement_explorer(
+            r_base,
+            negative_pool,
+            input_tokens,
+            max_context_length,
+            one_gen_req_token,
+            max_token,
+        )
 
-        # ---- 内层结束，检查本轮有没有有效增量 ----
+        # requirement_explorer 内部已经使用相似度检查去重，无需再次过滤
+        buffer_new_units = explored_units
+
         logger.info(
-            f"\n[内循环结束] 共探索 {inner_iter} 次，获得 {len(buffer_new_units)} 条新需求"
+            f"探索完成，获得 {len(buffer_new_units)} 条新需求（已在迭代过程中进行相似度去重）"
         )
 
         has_new_units = len(buffer_new_units) > 0
@@ -290,19 +421,52 @@ def run_srs_iteration(
                 f.write(srs_no_clarify)
             logger.info(f"已写入 SRS 文档: {os.path.join(output_dir, 'srs_no-clarify.md')}")
 
-        if has_new_units:
-            # 对新需求进行评分（无论数量是否达到目标）
-            logger.info(f"\n[步骤 3] 对新需求进行评分...")
-            clarified_new_units = requirement_clarifier(buffer_new_units, d_orig)
+        # 第一轮：只对新需求评分
+        if outer_iter == 1:
+            if has_new_units:
+                # 对新需求进行评分
+                logger.info(f"\n[第一轮] 仅对新探索的需求进行评分...")
+                clarified_new_units = requirement_clarifier(buffer_new_units, d_orig)
 
-            # 更新需求池
-            pool = merge_units(pool, clarified_new_units)
-            logger.info(f"需求池更新完成，当前大小: {len(pool)}")
+                # 更新需求池
+                pool = merge_units(pool, clarified_new_units)
+                logger.info(f"需求池更新完成，当前大小: {len(pool)}")
+            else:
+                logger.info("\n[步骤 3] 本轮无新需求可评分，需求池保持不变")
+        # 后续轮次：合并新生成需求和新探索需求后统一评分
         else:
-            logger.info("\n[步骤 3] 本轮无新需求可评分，需求池保持不变")
+            # requirement_explorer 和 requirement_improver 内部已经使用相似度检查去重
+            # 由于它们都检查了与 negative_pool 的相似度，而 negative_pool 包含了所有已有需求
+            # 所以 improved_units 和 explored_units 之间理论上不应该有重复
+            # 但为了保险起见，仍然记录一下
+            if len(buffer_improved_units) > 0 and len(buffer_new_units) > 0:
+                logger.info(f"\n[后续轮次] 新生成需求: {len(buffer_improved_units)}, 新探索需求: {len(buffer_new_units)}（已在各自迭代过程中进行相似度去重）")
+            
+            # 合并新生成需求和新探索需求
+            all_new_units = buffer_improved_units + buffer_new_units
+            
+            if len(all_new_units) > 0:
+                # 统一对合并后的需求进行评分
+                logger.info(f"\n[后续轮次] 合并新生成需求和新探索需求后统一评分（新生成需求: {len(buffer_improved_units)}, 新探索需求: {len(buffer_new_units)}）...")
+                clarified_all_units = requirement_clarifier(all_new_units, d_orig)
+
+                # 更新需求池
+                pool = merge_units(pool, clarified_all_units)
+                logger.info(f"需求池更新完成，当前大小: {len(pool)}")
+            else:
+                logger.info("\n[步骤 3] 本轮无新生成需求和新探索需求可评分，需求池保持不变")
 
         # 保存需求池（仅grade > 0）
         write_pool_to_disk(pool, str(outer_iter), output_dir)
+        
+        # 保存迭代统计数据
+        save_iteration_stats(
+            output_dir,
+            outer_iter,
+            pool,
+            buffer_new_units,
+            improved_units_count,
+        )
         
         # 每次外循环结束后：基于当前 pool 生成一个 SRS 版本
         logger.info(f"\n[步骤 4] 生成第 {outer_iter} 版 SRS 文档...")

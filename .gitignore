@@ -56,3 +56,4 @@ logs/
 output
 eval_reports
 tar
+test/script

@@ -743,6 +743,11 @@ def main() -> None:
         action="store_true",
         help="仅打印命令，不实际执行",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="强制重新调用模型并覆盖评估缓存（不使用已缓存的评估结果）",
+    )
     args = parser.parse_args()
 
     outputs_dir = Path(args.outputs_dir).expanduser().resolve()
@@ -788,6 +793,10 @@ def main() -> None:
         extra_args = parse_extra_args(args.eval_extra_args)
     else:
         extra_args = ["--skip-existing"]
+    
+    # 如果指定了 --no-cache，添加到额外参数中
+    if args.no_cache:
+        extra_args.append("--no-cache")
 
     doc_jobs: List[StageJob] = []
     unit_jobs: List[StageJob] = []

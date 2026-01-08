@@ -733,6 +733,12 @@ def main() -> None:
         help='传递给 srs-eval/main.py 的额外参数，例如 "--judges 1 --skip-existing"',
     )
     parser.add_argument(
+        "--min-judges-pass",
+        type=int,
+        default=None,
+        help="判定通过的评委数要求（绝对数量）。例如：3个评委中需要2个通过才算通过。默认使用多数投票（超过50%）",
+    )
+    parser.add_argument(
         "--max-parallel",
         type=int,
         default=1,
@@ -797,6 +803,10 @@ def main() -> None:
     # 如果指定了 --no-cache，添加到额外参数中
     if args.no_cache:
         extra_args.append("--no-cache")
+    
+    # 如果指定了 --min-judges-pass，添加到额外参数中
+    if args.min_judges_pass is not None:
+        extra_args.extend(["--min-judges-pass", str(args.min_judges_pass)])
 
     doc_jobs: List[StageJob] = []
     unit_jobs: List[StageJob] = []

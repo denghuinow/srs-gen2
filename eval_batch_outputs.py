@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -14,6 +15,22 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+# 添加 srs-eval 到路径以便导入
+SRS_EVAL_DIR = PROJECT_ROOT.parent / "srs-eval"
+if SRS_EVAL_DIR.exists():
+    sys.path.insert(0, str(SRS_EVAL_DIR))
+    try:
+        from src.output_formatter import OutputFormatter
+        from src.evaluator import DocumentEvaluation, CheckpointResult
+    except ImportError:
+        OutputFormatter = None
+        DocumentEvaluation = None
+        CheckpointResult = None
+else:
+    OutputFormatter = None
+    DocumentEvaluation = None
+    CheckpointResult = None
 
 
 @dataclass
@@ -128,11 +145,21 @@ def stage_sort_key(display_name: str) -> Tuple[int, object]:
         return (priority[name], 0)
     if name.startswith("iter"):
         suffix = name[4:]
-        try:
-            return (4, int(suffix))
-        except ValueError:
-            return (4, suffix)
-    return (5, name)
+        # 处理合并阶段名称，如 iter_1_to_2
+        if "_to_" in suffix:
+            # 提取最大迭代编号用于排序
+            try:
+                max_iter = int(suffix.split("_to_")[-1])
+                return (5, max_iter)  # 合并阶段排在普通迭代阶段之后
+            except (ValueError, IndexError):
+                return (5, suffix)
+        else:
+            # 普通迭代阶段
+            try:
+                return (4, int(suffix))
+            except ValueError:
+                return (4, suffix)
+    return (6, name)
 
 
 def collect_document_names(stages: Sequence[StageEvalSummary]) -> List[str]:
@@ -401,6 +428,200 @@ def write_time_sheet(ws, time_rows: Optional[List[List[str]]], csv_path: Path) -
         return
     for row in time_rows:
         ws.append(row)
+
+
+def extract_iter_number(stage_name: str) -> Optional[int]:
+    """从阶段名称中提取迭代编号
+    
+    Args:
+        stage_name: 阶段名称，如 "iter1", "iter2", "units_iter3"
+    
+    Returns:
+        迭代编号，如果无法提取则返回 None
+    """
+    # 匹配 iter 后面的数字
+    match = re.search(r'iter(\d+)', stage_name, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def merge_iter_evaluations(
+    stage_root: Path,
+    name_normalizer,
+    is_units: bool = False,
+) -> None:
+    """合并 iter_1 到 iter_n 的评估结果
+    
+    Args:
+        stage_root: 阶段根目录
+        name_normalizer: 阶段名称规范化函数
+        is_units: 是否为语义单元阶段
+    """
+    if OutputFormatter is None or DocumentEvaluation is None or CheckpointResult is None:
+        print("⚠ 无法导入 srs-eval 模块，跳过合并迭代通过项功能")
+        return
+    
+    if not stage_root.exists():
+        return
+    
+    # 加载所有阶段（排除合并阶段）
+    all_stages = []
+    for directory in sorted(stage_root.iterdir(), key=lambda p: p.name.lower()):
+        if not directory.is_dir():
+            continue
+        # 跳过合并阶段（包含 _to_ 的目录名）
+        if "_to_" in directory.name:
+            continue
+        display_name = name_normalizer(directory.name)
+        iter_num = extract_iter_number(display_name)
+        if iter_num is not None:
+            all_stages.append((iter_num, display_name, directory))
+    
+    if not all_stages:
+        return
+    
+    # 按迭代编号排序
+    all_stages.sort(key=lambda x: x[0])
+    
+    # 提取实际存在的迭代编号集合（去重并排序）
+    existing_iter_nums = sorted(set(num for num, _, _ in all_stages))
+    
+    if not existing_iter_nums:
+        return
+    
+    # 找到所有文档名称
+    all_doc_names = set()
+    for _, _, directory in all_stages:
+        for json_file in directory.glob("*_evaluation.json"):
+            doc_name = json_file.name.replace("_evaluation.json", "")
+            all_doc_names.add(doc_name)
+    
+    if not all_doc_names:
+        return
+    
+    # 为每个实际存在的迭代编号创建合并阶段
+    for max_iter in existing_iter_nums:
+        # 找到 iter_1 到 iter_max_iter 的所有阶段
+        iter_stages = [(num, name, dir_path) for num, name, dir_path in all_stages if num <= max_iter]
+        
+        if len(iter_stages) <= 1:
+            # 只有一个阶段，不需要合并
+            continue
+        
+        # 创建合并阶段名称（使用原始阶段名称格式，而不是规范化后的名称）
+        if is_units:
+            # 语义单元阶段：pool_iter_1_to_n
+            merged_stage_name = f"pool_iter_1_to_{max_iter}"
+        else:
+            # 文档阶段：srs_iter_1_to_n
+            merged_stage_name = f"srs_iter_1_to_{max_iter}"
+        merged_stage_dir = stage_root / merged_stage_name
+        merged_stage_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"合并阶段 {merged_stage_name}（包含 iter_1 到 iter_{max_iter}）")
+        
+        # 对每个文档进行合并
+        for doc_name in sorted(all_doc_names):
+            evaluations = []
+            checkpoints = None
+            
+            # 加载所有相关阶段的评估结果
+            for iter_num, stage_name, stage_dir in iter_stages:
+                json_file = stage_dir / f"{doc_name}_evaluation.json"
+                if not json_file.exists():
+                    continue
+                
+                evaluation = OutputFormatter.load_json(json_file)
+                if evaluation is None:
+                    continue
+                
+                evaluations.append(evaluation)
+                
+                # 使用第一个阶段的检查项列表作为基准
+                if checkpoints is None:
+                    checkpoints = evaluation.checkpoints
+            
+            if not evaluations:
+                continue
+            
+            if checkpoints is None:
+                continue
+            
+            # 合并检查项结果（OR 逻辑：任意一个阶段通过就算通过）
+            # 假设所有阶段使用相同的检查项列表（从同一个基准文档提取）
+            merged_checkpoint_results = []
+            for cp_idx, checkpoint in enumerate(checkpoints):
+                passed_in_any = False
+                passed_count = 0
+                total_stages = len(evaluations)
+                
+                # 从所有阶段收集该检查项的结果
+                category = None
+                checkpoint_content = None
+                raw_checkpoint = checkpoint
+                
+                for evaluation in evaluations:
+                    # 确保索引在范围内
+                    if cp_idx < len(evaluation.checkpoint_results):
+                        cp_result = evaluation.checkpoint_results[cp_idx]
+                        if cp_result.passed:
+                            passed_in_any = True
+                            passed_count += 1
+                        # 从第一个阶段获取元信息
+                        if category is None:
+                            category = cp_result.category
+                            checkpoint_content = cp_result.checkpoint
+                            raw_checkpoint = cp_result.raw_checkpoint
+                    elif cp_idx < len(evaluation.checkpoints):
+                        # 如果检查项结果数量不匹配，但检查项列表中有，尝试匹配
+                        # 这种情况不应该发生，但为了健壮性处理
+                        pass
+                
+                # 计算 pass_rate（通过的阶段数 / 总阶段数）
+                pass_rate = passed_count / total_stages if total_stages > 0 else 0.0
+                
+                # 如果没有找到检查项内容，从 checkpoint 字符串中提取
+                if checkpoint_content is None:
+                    checkpoint_content = checkpoint.split("] ", 1)[-1] if "] " in checkpoint else checkpoint
+                
+                merged_cp_result = CheckpointResult(
+                    checkpoint=checkpoint_content,
+                    passed=passed_in_any,
+                    pass_rate=pass_rate,
+                    category=category,
+                    raw_checkpoint=raw_checkpoint,
+                )
+                merged_checkpoint_results.append(merged_cp_result)
+            
+            # 创建合并后的评估结果
+            merged_evaluation = DocumentEvaluation(
+                target_document=evaluations[0].target_document,
+                checkpoints=checkpoints,
+                checkpoint_results=merged_checkpoint_results,
+                all_judge_results=None,  # 合并阶段不保留多评委结果
+                model_name=evaluations[0].model_name,
+                baseline_document=evaluations[0].baseline_document,
+            )
+            
+            # 保存合并后的评估结果
+            merged_json_file = merged_stage_dir / f"{doc_name}_evaluation.json"
+            merged_md_file = merged_stage_dir / f"{doc_name}_evaluation.md"
+            merged_tsv_file = merged_stage_dir / f"{doc_name}_evaluation.tsv"
+            
+            # 保存 JSON
+            json_data = OutputFormatter.to_json(merged_evaluation)
+            merged_json_file.write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            
+            # 保存 Markdown
+            md_content = OutputFormatter.to_markdown(merged_evaluation)
+            merged_md_file.write_text(md_content, encoding="utf-8")
+            
+            # 保存 TSV
+            tsv_content = OutputFormatter.to_csv([merged_evaluation])
+            merged_tsv_file.write_text(tsv_content, encoding="utf-8")
+        
+        print(f"✓ 合并阶段 {merged_stage_name} 完成")
 
 
 def generate_summary_workbook(
@@ -754,6 +975,11 @@ def main() -> None:
         action="store_true",
         help="强制重新调用模型并覆盖评估缓存（不使用已缓存的评估结果）",
     )
+    parser.add_argument(
+        "--merge-iter-passes",
+        action="store_true",
+        help="合并 iter_1 到 iter_n 的通过项（OR 逻辑：任意一个阶段通过就算通过），创建新的合并阶段（如 iter_1_to_n）",
+    )
     args = parser.parse_args()
 
     outputs_dir = Path(args.outputs_dir).expanduser().resolve()
@@ -919,6 +1145,15 @@ def main() -> None:
 
     summarize(doc_results, "SRS 文档", skip_stage_names={REFERENCE_STAGE_NAME})
     summarize(unit_results, "语义单元")
+
+    # 如果启用了合并迭代通过项功能，执行合并
+    if not args.dry_run and args.merge_iter_passes:
+        print("\n开始合并迭代阶段通过项...")
+        if args.mode in ("all", "docs"):
+            merge_iter_evaluations(doc_eval_root, normalize_doc_stage_name, is_units=False)
+        if args.mode in ("all", "units"):
+            merge_iter_evaluations(unit_eval_root, normalize_unit_stage_name, is_units=True)
+        print("迭代阶段合并完成\n")
 
     if not args.dry_run and not args.skip_summary_xlsx:
         summary_path = (

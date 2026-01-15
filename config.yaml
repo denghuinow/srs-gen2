@@ -54,7 +54,9 @@ iteration:
   # 最大外循环次数（每轮生成一版 SRS）
   max_outer_iter: 5
   # 最大内循环次数（每轮内尝试探索新需求的次数）
-  max_inner_iter: 5
+  max_inner_iter: 10
+  # 是否跳过 requirement_improver（后续轮次的需求改进步骤）
+  skip_requirement_improver: true
 
 # 相似度过滤配置
 similarity:
@@ -73,6 +75,6 @@ prompt:
 
 # Token 生成配置
 max_context_length: 131072  # 最大上下文长度
-one_gen_req_token: 4096  # 单次生成需求的目标 token 数
+one_gen_req_token: 8192  # 单次生成需求的目标 token 数
 # maxToken 使用现有的 openai.chat.max_tokens 或 openai.components.requirement_explorer.max_tokens
 

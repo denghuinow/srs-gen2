@@ -157,6 +157,11 @@ class Config:
         return self.get("iteration.max_inner_iter", 3)
     
     @property
+    def skip_requirement_improver(self) -> bool:
+        """获取是否跳过 requirement_improver"""
+        return self.get("iteration.skip_requirement_improver", False)
+    
+    @property
     def similarity_threshold(self) -> float:
         """获取相似度阈值"""
         return self.get("similarity.threshold", 0.8)

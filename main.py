@@ -221,6 +221,7 @@ def run_srs_iteration(
     rho: float = None,
     max_outer_iter: int = None,
     max_inner_iter: int = None,
+    skip_requirement_improver: bool = None,
 ) -> None:
     """
     主函数：运行多版本 SRS 生成迭代
@@ -233,6 +234,7 @@ def run_srs_iteration(
         rho: 每轮探索新需求的比例（相对于基线单元数量），如果为 None 则使用配置文件中的值
         max_outer_iter: 最大外循环次数，如果为 None 则使用配置文件中的值
         max_inner_iter: 最大内循环次数，如果为 None 则使用配置文件中的值
+        skip_requirement_improver: 是否跳过 requirement_improver，如果为 None 则使用配置文件中的值
     """
     # 从配置文件获取默认值
     if rho is None:
@@ -241,6 +243,8 @@ def run_srs_iteration(
         max_outer_iter = config.max_outer_iter
     if max_inner_iter is None:
         max_inner_iter = config.max_inner_iter
+    if skip_requirement_improver is None:
+        skip_requirement_improver = config.skip_requirement_improver
 
     # 验证配置
     config.validate()
@@ -249,7 +253,7 @@ def run_srs_iteration(
     logger.info("开始运行多版本 SRS 生成迭代")
     logger.info(f"输出目录: {output_dir}")
     logger.info(
-        f"rho: {rho}, max_outer_iter: {max_outer_iter}, max_inner_iter: {max_inner_iter}"
+        f"rho: {rho}, max_outer_iter: {max_outer_iter}, max_inner_iter: {max_inner_iter}, skip_requirement_improver: {skip_requirement_improver}"
     )
     logger.info("=" * 60)
 
@@ -308,55 +312,59 @@ def run_srs_iteration(
         
         # 后续轮次：先执行 requirement_improver（基于当前轮次开始时的需求池）
         if outer_iter > 1:
-            logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：先执行需求生成，再执行需求探索")
-            # 筛选积极需求
-            positive_units = [u for u in pool if u.grade is not None and u.grade > 0]
-            # 使用整个 pool 作为 negative_pool（用于避免重复和避免负分需求）
-            negative_pool = pool
-            
-            logger.info(f"\n[步骤 2] 发现 {len(positive_units)} 个积极需求，开始生成新需求和扩展积极需求...")
-            
-            # 计算 input_tokens（用于 requirement_improver）
-            template_improver = load_prompt_template("requirement_improver")
-            positive_texts = [f"REQ: {unit.text}" for unit in positive_units]
-            positive_units_text = "\n".join(positive_texts) if positive_texts else "（暂无积极需求）"
-            negative_texts = [unit.text for unit in negative_pool]
-            negative_pool_text = "\n".join(negative_texts) if negative_texts else "（暂无已有需求）"
-            
-            prompt_improver = template_improver.replace("{{R_BASE}}", r_base)
-            prompt_improver = prompt_improver.replace("{{POSITIVE_UNITS}}", positive_units_text)
-            prompt_improver = prompt_improver.replace("{{NEGATIVE_POOL}}", negative_pool_text)
-            
-            messages_improver = [{"role": "user", "content": prompt_improver}]
-            input_tokens_improver = count_tokens(messages_improver)
-            if input_tokens_improver is None:
-                logger.warning("无法计算 requirement_improver 的 input_tokens，使用估算值")
-                input_tokens_improver = int(len(prompt_improver) * 0.25)
-            
-            # 获取 max_token（优先使用 requirement_improver 的配置）
-            max_token_improver = config.get_component_max_tokens("requirement_improver")
-            if max_token_improver is None:
-                max_token_improver = max_token
-            
-            # 调用 requirement_improver（即使没有积极需求，也可以生成新需求）
-            improved_units = requirement_improver(
-                positive_units,
-                negative_pool,
-                r_base,
-                input_tokens_improver,
-                max_context_length,
-                one_gen_req_token,
-                max_token_improver,
-            )
-            
-            if len(improved_units) > 0:
-                # requirement_improver 内部已经使用相似度检查去重，无需再次过滤
-                buffer_improved_units = improved_units
-                improved_units_count = len(buffer_improved_units)
-                logger.info(f"生成完成，共生成 {len(improved_units)} 个新需求（已在迭代过程中进行相似度去重）")
+            if skip_requirement_improver:
+                logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：跳过 requirement_improver，直接执行需求探索")
             else:
-                buffer_improved_units = []
-                logger.warning("未生成任何新需求")
+                logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：先执行需求生成，再执行需求探索")
+                # 筛选积极需求
+                positive_units = [u for u in pool if u.grade is not None and u.grade > 0]
+                # 使用整个 pool 作为 negative_pool（用于避免重复和避免负分需求）
+                negative_pool = pool
+                
+                logger.info(f"\n[步骤 2] 发现 {len(positive_units)} 个积极需求，开始生成新需求和扩展积极需求...")
+                
+                # 计算 input_tokens（用于 requirement_improver）
+                template_improver = load_prompt_template("requirement_improver")
+                positive_texts = [f"REQ: {unit.text}" for unit in positive_units]
+                positive_units_text = "\n".join(positive_texts) if positive_texts else "（暂无积极需求）"
+                negative_texts = [unit.text for unit in negative_pool]
+                negative_pool_text = "\n".join(negative_texts) if negative_texts else "（暂无已有需求）"
+                
+                prompt_improver = template_improver.replace("{{R_BASE}}", r_base)
+                prompt_improver = prompt_improver.replace("{{POSITIVE_UNITS}}", positive_units_text)
+                prompt_improver = prompt_improver.replace("{{NEGATIVE_POOL}}", negative_pool_text)
+                
+                messages_improver = [{"role": "user", "content": prompt_improver}]
+                input_tokens_improver = count_tokens(messages_improver)
+                if input_tokens_improver is None:
+                    logger.warning("无法计算 requirement_improver 的 input_tokens，使用估算值")
+                    input_tokens_improver = int(len(prompt_improver) * 0.25)
+                
+                # 获取 max_token（优先使用 requirement_improver 的配置）
+                max_token_improver = config.get_component_max_tokens("requirement_improver")
+                if max_token_improver is None:
+                    max_token_improver = max_token
+                
+                # 调用 requirement_improver（即使没有积极需求，也可以生成新需求）
+                improved_units = requirement_improver(
+                    positive_units,
+                    negative_pool,
+                    r_base,
+                    input_tokens_improver,
+                    max_context_length,
+                    one_gen_req_token,
+                    max_token_improver,
+                    max_inner_iter,
+                )
+                
+                if len(improved_units) > 0:
+                    # requirement_improver 内部已经使用相似度检查去重，无需再次过滤
+                    buffer_improved_units = improved_units
+                    improved_units_count = len(buffer_improved_units)
+                    logger.info(f"生成完成，共生成 {len(improved_units)} 个新需求（已在迭代过程中进行相似度去重）")
+                else:
+                    buffer_improved_units = []
+                    logger.warning("未生成任何新需求")
 
         # requirement_explorer 内部已经处理了迭代逻辑（最多5次），这里只需要调用一次
         if outer_iter == 1:
@@ -384,7 +392,7 @@ def run_srs_iteration(
         
         logger.info(f"计算得到 input_tokens: {input_tokens}")
 
-        # 探索新需求（基于 token 数，内部会迭代最多5次）
+        # 探索新需求（基于 token 数，内部会迭代 max_inner_iter 次）
         explored_units = requirement_explorer(
             r_base,
             negative_pool,
@@ -392,6 +400,7 @@ def run_srs_iteration(
             max_context_length,
             one_gen_req_token,
             max_token,
+            max_inner_iter,
         )
 
         # requirement_explorer 内部已经使用相似度检查去重，无需再次过滤
@@ -525,6 +534,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-inner-iter", type=int, help="覆盖配置文件中的 max_inner_iter"
     )
+    parser.add_argument(
+        "--skip-requirement-improver",
+        dest="skip_requirement_improver",
+        action="store_true",
+        help="跳过 requirement_improver 的执行（覆盖配置文件中的设置）",
+    )
     args = parser.parse_args()
 
     def _load_text_from_candidate(candidate: str) -> str:
@@ -574,4 +589,5 @@ if __name__ == "__main__":
         rho=args.rho,
         max_outer_iter=args.max_outer_iter,
         max_inner_iter=args.max_inner_iter,
+        skip_requirement_improver=args.skip_requirement_improver if args.skip_requirement_improver else None,
     )

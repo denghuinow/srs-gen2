@@ -194,6 +194,7 @@ def requirement_explorer(
     max_context_length: int,
     one_gen_req_token: int,
     max_token: Optional[int],
+    max_inner_iter: int = 5,
 ) -> List[SemanticUnit]:
     """
     探索新需求（基于 token 数的迭代生成）
@@ -205,11 +206,12 @@ def requirement_explorer(
         max_context_length: 最大上下文长度
         one_gen_req_token: 单次生成需求的目标 token 数
         max_token: 最大 token 数限制（从配置获取，可能为 None）
+        max_inner_iter: 最大内循环次数
     
     Returns:
         新探索的语义单元列表（已计算 token_count）
     """
-    logger.info(f"开始探索新需求，input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}")
+    logger.info(f"开始探索新需求，input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}, max_inner_iter={max_inner_iter}")
     
     # 计算目标 token 数
     if max_token is not None:
@@ -249,8 +251,8 @@ def requirement_explorer(
         if unit.vector is None:
             unit.vector = get_embedding(unit.text)
     
-    for iteration in range(5):
-        logger.info(f"[requirement_explorer 迭代] 第 {iteration + 1}/5 次，当前 token 数: {current_tokens}/{target_tokens}")
+    for iteration in range(max_inner_iter):
+        logger.info(f"[requirement_explorer 迭代] 第 {iteration + 1}/{max_inner_iter} 次，当前 token 数: {current_tokens}/{target_tokens}")
         
         def _invoke():
             # 调用 LLM，将 target_tokens 作为 max_tokens 传入
@@ -350,6 +352,7 @@ def requirement_improver(
     max_context_length: int,
     one_gen_req_token: int,
     max_token: Optional[int],
+    max_inner_iter: int = 5,
 ) -> List[SemanticUnit]:
     """
     生成新需求和扩展积极需求（基于 token 数的迭代生成）
@@ -362,11 +365,12 @@ def requirement_improver(
         max_context_length: 最大上下文长度
         one_gen_req_token: 单次生成需求的目标 token 数
         max_token: 最大 token 数限制（从配置获取，可能为 None）
+        max_inner_iter: 最大内循环次数
     
     Returns:
         新生成的语义单元列表（已计算 token_count）
     """
-    logger.info(f"开始生成新需求和扩展积极需求，积极需求数量: {len(positive_units)}, 负样本池大小: {len(negative_pool)}, input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}")
+    logger.info(f"开始生成新需求和扩展积极需求，积极需求数量: {len(positive_units)}, 负样本池大小: {len(negative_pool)}, input_tokens={input_tokens}, max_context_length={max_context_length}, one_gen_req_token={one_gen_req_token}, max_token={max_token}, max_inner_iter={max_inner_iter}")
     
     # 计算目标 token 数
     if max_token is not None:
@@ -420,8 +424,8 @@ def requirement_improver(
         if unit.vector is None:
             unit.vector = get_embedding(unit.text)
     
-    for iteration in range(5):
-        logger.info(f"[requirement_improver 迭代] 第 {iteration + 1}/5 次，当前 token 数: {current_tokens}/{target_tokens}")
+    for iteration in range(max_inner_iter):
+        logger.info(f"[requirement_improver 迭代] 第 {iteration + 1}/{max_inner_iter} 次，当前 token 数: {current_tokens}/{target_tokens}")
         
         def _invoke():
             # 调用 LLM，将 target_tokens 作为 max_tokens 传入

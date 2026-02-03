@@ -373,12 +373,12 @@ def write_stage_score_sheet(
     include_reference_row: bool = True,
 ) -> None:
     doc_names, rows = build_stage_score_rows(stages, include_reference_row)
-    header = ["序号", column_label]
+    header = ["Seq", column_label]
     if doc_names:
         header.extend(doc_names)
     ws.append(header)
     if not rows:
-        ws.append(["-", "无可用评估结果"])
+        ws.append(["-", "No evaluation results available"])
         return
     for row in rows:
         ws.append(row)
@@ -389,10 +389,10 @@ def write_stage_summary_sheet(
     stages: Sequence[StageEvalSummary],
     include_reference_row: bool = True,
 ) -> None:
-    ws.append(["序号", "阶段", "文档数", "平均加权得分", "平均投票通过率", "平均通过率"])
+    ws.append(["Seq", "Stage", "Doc Count", "Avg Weighted Score", "Avg Voting Pass Rate", "Avg Pass Rate"])
     rows = build_stage_summary_rows(stages, include_reference_row)
     if not rows:
-        ws.append(["-", "无可用评估阶段"])
+        ws.append(["-", "No evaluation stages available"])
         return
     for row in rows:
         ws.append(row)
@@ -403,10 +403,10 @@ def write_dimension_sheet(
     stages: Sequence[StageEvalSummary],
     include_reference_row: bool = True,
 ) -> None:
-    ws.append(["序号", "阶段", *DIMENSION_ORDER, "平均投票通过率", "平均通过率"])
+    ws.append(["Seq", "Stage", *DIMENSION_ORDER, "Avg Voting Pass Rate", "Avg Pass Rate"])
     rows = build_dimension_rows(stages, include_reference_row)
     if not rows:
-        ws.append(["-", "无可用维度数据"])
+        ws.append(["-", "No dimension data available"])
         return
     for row in rows:
         ws.append(row)
@@ -424,7 +424,7 @@ def load_time_stats(csv_path: Path) -> Optional[List[List[str]]]:
 
 def write_time_sheet(ws, time_rows: Optional[List[List[str]]], csv_path: Path) -> None:
     if not time_rows:
-        ws.append(["提示", f"未找到耗时统计文件：{csv_path}"])
+        ws.append(["Note", f"Time statistics file not found: {csv_path}"])
         return
     for row in time_rows:
         ws.append(row)
@@ -645,25 +645,25 @@ def generate_summary_workbook(
     wb = Workbook()
 
     doc_sheet = wb.active
-    doc_sheet.title = "文档逐阶段"
-    write_stage_score_sheet(doc_sheet, doc_stages, "阶段/文档")
+    doc_sheet.title = "Document by Stage"
+    write_stage_score_sheet(doc_sheet, doc_stages, "Stage/Document")
 
-    doc_summary_sheet = wb.create_sheet("文档阶段统计")
+    doc_summary_sheet = wb.create_sheet("Document Stage Summary")
     write_stage_summary_sheet(doc_summary_sheet, doc_stages)
 
-    doc_dimension_sheet = wb.create_sheet("文档维度")
+    doc_dimension_sheet = wb.create_sheet("Document Dimensions")
     write_dimension_sheet(doc_dimension_sheet, doc_stages)
 
-    unit_sheet = wb.create_sheet("语义单元逐阶段")
-    write_stage_score_sheet(unit_sheet, unit_stages, "阶段", include_reference_row=False)
+    unit_sheet = wb.create_sheet("Semantic Unit by Stage")
+    write_stage_score_sheet(unit_sheet, unit_stages, "Stage", include_reference_row=False)
 
-    unit_summary_sheet = wb.create_sheet("语义单元阶段统计")
+    unit_summary_sheet = wb.create_sheet("Semantic Unit Stage Summary")
     write_stage_summary_sheet(unit_summary_sheet, unit_stages, include_reference_row=False)
 
-    unit_dimension_sheet = wb.create_sheet("语义单元维度")
+    unit_dimension_sheet = wb.create_sheet("Semantic Unit Dimensions")
     write_dimension_sheet(unit_dimension_sheet, unit_stages, include_reference_row=False)
 
-    time_sheet = wb.create_sheet("生成耗时")
+    time_sheet = wb.create_sheet("Generation Time")
     time_rows = load_time_stats(outputs_dir / "耗时统计-总耗时.csv")
     write_time_sheet(time_sheet, time_rows, outputs_dir / "耗时统计-总耗时.csv")
 

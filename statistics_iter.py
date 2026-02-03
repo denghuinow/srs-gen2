@@ -434,15 +434,15 @@ def collect_statistics_for_iter(
         units_merge_passed_count = count_passed_check_items(units_merge_md) if units_merge_md.exists() else None
         
         data.append({
-            "文档名称": doc_name,
-            "检查项数量": check_item_count,
-            "有效需求单元数量": semantic_units_count,
-            "需求池数量": pool_size,
-            "SRS检查项通过数": srs_passed_count,
-            "SRS阶段合并通过数": srs_merge_passed_count,
-            "语义单元检查项通过数": units_passed_count,
-            "语义单元阶段合并通过数": units_merge_passed_count,
-            "无效需求率": invalid_rate,
+            "doc_name": doc_name,
+            "check_item_count": check_item_count,
+            "valid_semantic_units_count": semantic_units_count,
+            "pool_size": pool_size,
+            "srs_passed_count": srs_passed_count,
+            "srs_merge_passed_count": srs_merge_passed_count,
+            "units_passed_count": units_passed_count,
+            "units_merge_passed_count": units_merge_passed_count,
+            "invalid_rate": invalid_rate,
         })
     
     return data
@@ -534,26 +534,26 @@ def collect_statistics_for_special_versions(
         
         # 添加到结果中
         result["d_base"].append({
-            "文档名称": doc_name,
-            "需求池数量": d_base_data["pool_size"],
-            "有效需求单元数量": d_base_data["semantic_units_count"],
-            "无效需求率": d_base_data["invalid_rate"],
+            "doc_name": doc_name,
+            "pool_size": d_base_data["pool_size"],
+            "valid_semantic_units_count": d_base_data["semantic_units_count"],
+            "invalid_rate": d_base_data["invalid_rate"],
         })
         
         if no_explore_clarify_data:
             result["no-explore-clarify"].append({
-                "文档名称": doc_name,
-                "需求池数量": no_explore_clarify_data["pool_size"],
-                "有效需求单元数量": no_explore_clarify_data["semantic_units_count"],
-                "无效需求率": no_explore_clarify_data["invalid_rate"],
+                "doc_name": doc_name,
+                "pool_size": no_explore_clarify_data["pool_size"],
+                "valid_semantic_units_count": no_explore_clarify_data["semantic_units_count"],
+                "invalid_rate": no_explore_clarify_data["invalid_rate"],
             })
         
         if no_clarify_data:
             result["no-clarify"].append({
-                "文档名称": doc_name,
-                "需求池数量": no_clarify_data["pool_size"],
-                "有效需求单元数量": no_clarify_data["semantic_units_count"],
-                "无效需求率": no_clarify_data["invalid_rate"],
+                "doc_name": doc_name,
+                "pool_size": no_clarify_data["pool_size"],
+                "valid_semantic_units_count": no_clarify_data["semantic_units_count"],
+                "invalid_rate": no_clarify_data["invalid_rate"],
             })
     
     return result
@@ -589,11 +589,11 @@ def create_pass_rate_segmentation_sheet(
     # 收集所有文档的详细信息
     doc_details = []
     for row_data in data:
-        doc_name = row_data["文档名称"]
-        check_item_count = row_data["检查项数量"]
-        srs_merge_passed_count = row_data["SRS阶段合并通过数"]
-        invalid_rate = row_data["无效需求率"]
-        pool_size = row_data["需求池数量"]
+        doc_name = row_data["doc_name"]
+        check_item_count = row_data["check_item_count"]
+        srs_merge_passed_count = row_data["srs_merge_passed_count"]
+        invalid_rate = row_data["invalid_rate"]
+        pool_size = row_data["pool_size"]
         
         # 计算通过率
         pass_rate = None
@@ -648,7 +648,7 @@ def create_pass_rate_segmentation_sheet(
         start_idx = end_idx
     
     # 创建sheet
-    sheet_name = "通过率分段汇总"
+    sheet_name = "Pass Rate Segmentation"
     if sheet_name in wb.sheetnames:
         wb.remove(wb[sheet_name])
     if sheet_index is not None:
@@ -657,7 +657,7 @@ def create_pass_rate_segmentation_sheet(
         ws = wb.create_sheet(title=sheet_name)
     
     # 表头
-    headers = ["文档名称", "SRS标题", "摘要内容", "加权分", "投票通过率", "通过率", "需求池数量", "无效率"]
+    headers = ["Doc Name", "SRS Title", "Summary", "Weighted Score", "Voting Pass Rate", "Pass Rate", "Pool Size", "Invalid Rate"]
     ws.append(headers)
     
     # 设置表头样式
@@ -669,7 +669,7 @@ def create_pass_rate_segmentation_sheet(
         cell.alignment = header_alignment
     
     # 写入各段数据
-    segment_names = ["高通过率段", "中通过率段", "低通过率段"]
+    segment_names = ["High Pass Rate", "Medium Pass Rate", "Low Pass Rate"]
     current_row = 2
     
     for seg_idx, (segment_name, segment_docs) in enumerate(zip(segment_names, segments)):
@@ -775,11 +775,11 @@ def create_invalid_rate_segmentation_sheet(
     # 收集所有文档的详细信息
     doc_details = []
     for row_data in data:
-        doc_name = row_data["文档名称"]
-        check_item_count = row_data["检查项数量"]
-        srs_merge_passed_count = row_data["SRS阶段合并通过数"]
-        invalid_rate = row_data["无效需求率"]
-        pool_size = row_data["需求池数量"]
+        doc_name = row_data["doc_name"]
+        check_item_count = row_data["check_item_count"]
+        srs_merge_passed_count = row_data["srs_merge_passed_count"]
+        invalid_rate = row_data["invalid_rate"]
+        pool_size = row_data["pool_size"]
         
         # 计算通过率
         pass_rate = None
@@ -834,7 +834,7 @@ def create_invalid_rate_segmentation_sheet(
         start_idx = end_idx
     
     # 创建sheet
-    sheet_name = "无效率分段汇总"
+    sheet_name = "Invalid Rate Segmentation"
     if sheet_name in wb.sheetnames:
         wb.remove(wb[sheet_name])
     if sheet_index is not None:
@@ -843,7 +843,7 @@ def create_invalid_rate_segmentation_sheet(
         ws = wb.create_sheet(title=sheet_name)
     
     # 表头
-    headers = ["文档名称", "SRS标题", "摘要内容", "加权分", "投票通过率", "通过率", "需求池数量", "无效率"]
+    headers = ["Doc Name", "SRS Title", "Summary", "Weighted Score", "Voting Pass Rate", "Pass Rate", "Pool Size", "Invalid Rate"]
     ws.append(headers)
     
     # 设置表头样式
@@ -855,7 +855,7 @@ def create_invalid_rate_segmentation_sheet(
         cell.alignment = header_alignment
     
     # 写入各段数据
-    segment_names = ["高无效率段", "中无效率段", "低无效率段"]
+    segment_names = ["High Invalid Rate", "Medium Invalid Rate", "Low Invalid Rate"]
     current_row = 2
     
     for seg_idx, (segment_name, segment_docs) in enumerate(zip(segment_names, segments)):
@@ -945,27 +945,27 @@ def create_weight_config_sheet(
     # 权重配置数据
     weights_config = {
         "FUNCTIONAL": {
-            "name_cn": "功能覆盖 / 行为规则",
+            "name_en": "Functional Coverage / Behavioral Rules",
             "weight": 0.25,
         },
         "BUSINESS_FLOW": {
-            "name_cn": "业务流程完整性",
+            "name_en": "Business Flow Completeness",
             "weight": 0.15,
         },
         "BOUNDARY": {
-            "name_cn": "边界条件完整性",
+            "name_en": "Boundary Condition Completeness",
             "weight": 0.10,
         },
         "EXCEPTION": {
-            "name_cn": "异常处理覆盖度",
+            "name_en": "Exception Handling Coverage",
             "weight": 0.20,
         },
         "DATA_STATE": {
-            "name_cn": "数据与状态完整性",
+            "name_en": "Data and State Completeness",
             "weight": 0.20,
         },
         "CONSISTENCY_RULE": {
-            "name_cn": "一致性 / 冲突检测",
+            "name_en": "Consistency / Conflict Detection",
             "weight": 0.10,
         },
     }
@@ -974,7 +974,7 @@ def create_weight_config_sheet(
     scale_factor = 2.0
     
     # 创建sheet
-    sheet_name = "权重配置"
+    sheet_name = "Weight Configuration"
     if sheet_name in wb.sheetnames:
         wb.remove(wb[sheet_name])
     if sheet_index is not None:
@@ -983,7 +983,7 @@ def create_weight_config_sheet(
         ws = wb.create_sheet(title=sheet_name)
     
     # 表头
-    headers = ["维度代码", "维度名称", "权重值", "权重百分比(%)"]
+    headers = ["Dimension Code", "Dimension Name", "Weight Value", "Weight Percentage (%)"]
     ws.append(headers)
     
     # 设置表头样式
@@ -1000,39 +1000,39 @@ def create_weight_config_sheet(
         weight_percent = weight_value * 100
         ws.append([
             dim_code,
-            config["name_cn"],
+            config["name_en"],
             weight_value,
             round(weight_percent, 2),
         ])
     
     # 添加汇总行
     ws.append([])  # 空行
-    ws.append(["权重总和", "", sum(c["weight"] for c in weights_config.values()), "100.00"])
+    ws.append(["Total Weight", "", sum(c["weight"] for c in weights_config.values()), "100.00"])
     ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
     ws.cell(row=ws.max_row, column=3).font = Font(bold=True)
     ws.cell(row=ws.max_row, column=4).font = Font(bold=True)
     
     # 添加计算公式说明
     ws.append([])  # 空行
-    ws.append(["计算公式说明", "", "", ""])
+    ws.append(["Calculation Formula", "", "", ""])
     ws.cell(row=ws.max_row, column=1).font = Font(bold=True, size=11)
     
-    ws.append(["", "步骤1：计算加权平均", "", ""])
-    ws.append(["", "加权平均 = Σ(维度得分 × 维度权重)", "", ""])
+    ws.append(["", "Step 1: Calculate Weighted Average", "", ""])
+    ws.append(["", "Weighted Average = Σ(Dimension Score × Dimension Weight)", "", ""])
     ws.cell(row=ws.max_row, column=2).font = Font(italic=True)
     
     ws.append([])  # 空行
-    ws.append(["", "步骤2：乘以缩放系数", "", ""])
-    ws.append(["", f"加权得分 = 加权平均 × {scale_factor}", "", ""])
+    ws.append(["", "Step 2: Multiply by Scale Factor", "", ""])
+    ws.append(["", f"Weighted Score = Weighted Average × {scale_factor}", "", ""])
     ws.cell(row=ws.max_row, column=2).font = Font(italic=True)
     
     ws.append([])  # 空行
-    ws.append(["", "步骤3：应用上限", "", ""])
-    ws.append(["", "最终得分 = min(100.0, 加权得分)", "", ""])
+    ws.append(["", "Step 3: Apply Upper Limit", "", ""])
+    ws.append(["", "Final Score = min(100.0, Weighted Score)", "", ""])
     ws.cell(row=ws.max_row, column=2).font = Font(italic=True)
     
     ws.append([])  # 空行
-    ws.append(["缩放系数", f"{scale_factor}", "", ""])
+    ws.append(["Scale Factor", f"{scale_factor}", "", ""])
     ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
     ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
     
@@ -1072,12 +1072,12 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
     
     # 检查并创建汇总sheet（各迭代无效需求率平均值）
     # 放在最前面（index=0）
-    summary_sheet_name = "无效需求率汇总"
+    summary_sheet_name = "Invalid Rate Summary"
     if summary_sheet_name in wb.sheetnames:
         # 如果已存在，删除后重新创建
         wb.remove(wb[summary_sheet_name])
     summary_ws = wb.create_sheet(title=summary_sheet_name, index=0)
-    summary_headers = ["迭代编号", "无效需求率平均值(%)"]
+    summary_headers = ["Iteration", "Avg Invalid Rate (%)"]
     summary_ws.append(summary_headers)
     
     # 设置汇总表头样式
@@ -1091,7 +1091,7 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
     # 计算并写入各迭代的无效需求率平均值
     for iter_num in sorted(all_data.keys()):
         data = all_data[iter_num]
-        invalid_rates = [d["无效需求率"] for d in data if d["无效需求率"] is not None]
+        invalid_rates = [d["invalid_rate"] for d in data if d["invalid_rate"] is not None]
         if invalid_rates:
             avg_rate = sum(invalid_rates) / len(invalid_rates)
             summary_ws.append([iter_num, round(avg_rate, 2)])
@@ -1130,7 +1130,7 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
             current_index += 1
             
             # 表头
-            headers = ["文档名称", "需求池数量", "有效需求单元数量", "无效需求率"]
+            headers = ["Doc Name", "Pool Size", "Valid Semantic Units Count", "Invalid Rate"]
             ws.append(headers)
             
             # 设置表头样式
@@ -1144,10 +1144,10 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
             # 写入数据
             for row_data in data:
                 ws.append([
-                    row_data["文档名称"],
-                    row_data["需求池数量"],
-                    row_data["有效需求单元数量"],
-                    round(row_data["无效需求率"], 2) if row_data["无效需求率"] is not None else None,
+                    row_data["doc_name"],
+                    row_data["pool_size"],
+                    row_data["valid_semantic_units_count"],
+                    round(row_data["invalid_rate"], 2) if row_data["invalid_rate"] is not None else None,
                 ])
             
             # 设置列宽
@@ -1166,7 +1166,7 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
                 cell.alignment = Alignment(horizontal='left', vertical='center')
     
     # 表头（按逻辑分组：基础信息 → 迭代数据 → SRS相关 → 语义单元相关 → 计算指标）
-    headers = ["文档名称", "检查项数量", "有效需求单元数量", "需求池数量", "SRS检查项通过数", "SRS阶段合并通过数", "语义单元检查项通过数", "语义单元阶段合并通过数", "无效需求率"]
+    headers = ["Doc Name", "Check Item Count", "Valid Semantic Units Count", "Pool Size", "SRS Passed Count", "SRS Merge Passed Count", "Units Passed Count", "Units Merge Passed Count", "Invalid Rate"]
     
     # 为每个迭代创建sheet（放在特殊版本之后）
     for iter_num in sorted(all_data.keys()):
@@ -1197,15 +1197,15 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
         # 写入数据
         for row_data in data:
             ws.append([
-                row_data["文档名称"],
-                row_data["检查项数量"],
-                row_data["有效需求单元数量"],
-                row_data["需求池数量"],
-                row_data["SRS检查项通过数"],
-                row_data["SRS阶段合并通过数"],
-                row_data["语义单元检查项通过数"],
-                row_data["语义单元阶段合并通过数"],
-                row_data["无效需求率"],
+                row_data["doc_name"],
+                row_data["check_item_count"],
+                row_data["valid_semantic_units_count"],
+                row_data["pool_size"],
+                row_data["srs_passed_count"],
+                row_data["srs_merge_passed_count"],
+                row_data["units_passed_count"],
+                row_data["units_merge_passed_count"],
+                row_data["invalid_rate"],
             ])
         
         # 设置列宽
@@ -1241,7 +1241,7 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
 def main():
     """主函数"""
     # 设置路径
-    eval_reports_dir = Path("/root/project/srs/srs-gen2/eval_reports/minimal_en_iter8_merge_passes_1judge_pass_Loose")
+    eval_reports_dir = Path("/root/project/srs/srs-gen2/eval_reports/minimal_en_iter8_merge_passes_1judge_pass_Loose2")
     output_dir = Path("/root/project/srs/srs-gen2/output/minimal_en_iter8/")
     source_excel_path = eval_reports_dir / "数据汇总v2.xlsx"
     output_excel = eval_reports_dir / "数据汇总v3.xlsx"
@@ -1275,7 +1275,7 @@ def main():
         if data:
             print(f"  前3条数据预览:")
             for i, row in enumerate(data[:3], 1):
-                print(f"    {i}. {row['文档名称']}: 检查项={row['检查项数量']}, 有效需求单元={row['有效需求单元数量']}, SRS通过数={row['SRS检查项通过数']}")
+                print(f"    {i}. {row['doc_name']}: 检查项={row['check_item_count']}, 有效需求单元={row['valid_semantic_units_count']}, SRS通过数={row['srs_passed_count']}")
     
     # 收集特殊版本数据（d_base、no-explore-clarify、no-clarify）
     print("\n开始收集特殊版本统计数据...")
@@ -1296,14 +1296,14 @@ def main():
     
     for iter_num in sorted(all_data.keys()):
         data = all_data[iter_num]
-        check_counts = [d["检查项数量"] for d in data if d["检查项数量"] is not None]
-        unit_counts = [d["有效需求单元数量"] for d in data if d["有效需求单元数量"] is not None]
-        srs_passed_counts = [d["SRS检查项通过数"] for d in data if d["SRS检查项通过数"] is not None]
-        pool_sizes = [d["需求池数量"] for d in data if d["需求池数量"] is not None]
-        units_passed_counts = [d["语义单元检查项通过数"] for d in data if d["语义单元检查项通过数"] is not None]
-        invalid_rates = [d["无效需求率"] for d in data if d["无效需求率"] is not None]
-        srs_merge_passed_counts = [d["SRS阶段合并通过数"] for d in data if d["SRS阶段合并通过数"] is not None]
-        units_merge_passed_counts = [d["语义单元阶段合并通过数"] for d in data if d["语义单元阶段合并通过数"] is not None]
+        check_counts = [d["check_item_count"] for d in data if d["check_item_count"] is not None]
+        unit_counts = [d["valid_semantic_units_count"] for d in data if d["valid_semantic_units_count"] is not None]
+        srs_passed_counts = [d["srs_passed_count"] for d in data if d["srs_passed_count"] is not None]
+        pool_sizes = [d["pool_size"] for d in data if d["pool_size"] is not None]
+        units_passed_counts = [d["units_passed_count"] for d in data if d["units_passed_count"] is not None]
+        invalid_rates = [d["invalid_rate"] for d in data if d["invalid_rate"] is not None]
+        srs_merge_passed_counts = [d["srs_merge_passed_count"] for d in data if d["srs_merge_passed_count"] is not None]
+        units_merge_passed_counts = [d["units_merge_passed_count"] for d in data if d["units_merge_passed_count"] is not None]
         
         print(f"\n迭代 {iter_num}:")
         if check_counts:

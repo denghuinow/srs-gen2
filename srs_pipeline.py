@@ -590,11 +590,11 @@ def requirement_clarifier(
 
 def srs_generator(grade_units: List[SemanticUnit]) -> str:
     """
-    根据已评分的语义单元生成 SRS 文档
-    
+    根据语义单元列表生成 SRS 文档
+
     Args:
-        grade_units: 已评分的语义单元列表（grade > 0）
-    
+        grade_units: 语义单元列表；若 unit.grade 为 None，则按 1（需细化扩展）传入 prompt
+
     Returns:
         SRS 文档文本（Markdown 格式）
     """
@@ -603,9 +603,9 @@ def srs_generator(grade_units: List[SemanticUnit]) -> str:
     # 加载模板
     template = load_prompt_template("srs_generator")
     
-    # 准备单元列表（只包含 text 和 grade）
+    # 准备单元列表（只包含 text 和 grade；grade 为 None 时按 1 处理，即需细化扩展）
     units_data = [
-        {"text": unit.text, "grade": unit.grade}
+        {"text": unit.text, "grade": unit.grade if unit.grade is not None else 1}
         for unit in grade_units
     ]
     units_json = json.dumps({"units": units_data}, ensure_ascii=False, indent=2)

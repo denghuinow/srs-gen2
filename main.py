@@ -11,7 +11,6 @@ from srs_pipeline import (
     split_to_semantic_units,
     requirement_explorer,
     requirement_improver,
-    requirement_clarifier,
     srs_generator,
 )
 from utils.token_counter import count_tokens
@@ -34,20 +33,17 @@ def generate_srs_from_pool(pool: List[SemanticUnit]) -> str:
     从需求池生成一版 SRS
 
     Args:
-        pool: 需求池（包含已评分的语义单元）
+        pool: 需求池（语义单元列表，全量参与生成）
 
     Returns:
         SRS 文档文本
     """
-    # 筛选出 grade > 0 的单元
-    grade_units = [u for u in pool if u.grade is not None and u.grade > 0]
-    logger.info(f"从需求池中筛选出 {len(grade_units)} 个已采纳需求（grade > 0）")
-
-    if len(grade_units) == 0:
-        logger.warning("需求池中没有已采纳的需求，返回空文档")
+    if len(pool) == 0:
+        logger.warning("需求池为空，返回空文档")
         return "# 软件需求规格说明书\n\n暂无需求。\n"
 
-    return srs_generator(grade_units)
+    logger.info(f"从需求池中取 {len(pool)} 个语义单元生成 SRS")
+    return srs_generator(pool)
 
 
 def write_srs_to_disk(curr_srs: str, iter_idx: int, output_dir: str) -> None:
@@ -97,18 +93,15 @@ def write_units_to_disk(units: List[SemanticUnit], filename: str, output_dir: st
 
 def write_pool_to_disk(pool: List[SemanticUnit], iter_name: str, output_dir: str) -> None:
     """
-    将需求池保存到文本文件（仅保存 grade > 0 的语义单元文本内容）
+    将需求池保存到文本文件（保存全部语义单元文本内容）
 
     Args:
-        pool: 需求池（包含已评分的语义单元）
+        pool: 需求池（语义单元列表）
         iter_name: 迭代名称（迭代编号，如 "1", "2"）
         output_dir: 输出目录路径
     """
-    # 筛选出 grade > 0 的单元
-    grade_units = [u for u in pool if u.grade is not None and u.grade > 0]
-    
-    if len(grade_units) == 0:
-        logger.warning("需求池中没有 grade > 0 的语义单元，跳过保存")
+    if len(pool) == 0:
+        logger.warning("需求池为空，跳过保存")
         return
 
     # 确保输出目录存在
@@ -117,12 +110,12 @@ def write_pool_to_disk(pool: List[SemanticUnit], iter_name: str, output_dir: str
     # 生成文件路径
     filepath = os.path.join(output_dir, f"pool_iter_{iter_name}.txt")
 
-    # 写入文件（每行一个语义单元文本，不包含grade）
+    # 写入文件（每行一个语义单元文本）
     with open(filepath, "w", encoding="utf-8") as f:
-        for unit in grade_units:
+        for unit in pool:
             f.write(unit.text + "\n")
 
-    logger.info(f"已保存 {len(grade_units)} 个已采纳需求（grade > 0）到: {filepath}")
+    logger.info(f"已保存 {len(pool)} 个语义单元到: {filepath}")
 
 
 def merge_units(
@@ -172,7 +165,7 @@ def save_iteration_stats(
     """
     # 计算统计数据
     pool_size = len(pool)
-    semantic_units_count = len([u for u in pool if u.grade is not None and u.grade > 0])
+    semantic_units_count = len(pool)
     new_units_count = len(buffer_new_units)
     
     # 构建统计数据
@@ -274,10 +267,8 @@ def run_srs_iteration(
         f.write(srs_no_explore_clarify)
     logger.info(f"已写入 SRS 文档: {os.path.join(output_dir, 'srs_no-explore-clarify.md')}")
 
-    logger.info("\n[步骤 2] 对基线单元进行评分...")
-    pool = []
-    clarified_baseline_units = requirement_clarifier(baseline_units, d_orig)
-    pool = merge_units(pool, clarified_baseline_units)
+    logger.info("\n[步骤 2] 初始化需求池（基线单元直接入池，不评分）...")
+    pool = merge_units([], baseline_units)
     logger.info(f"需求池初始化完成，当前大小: {len(pool)}")
 
     # 计算每轮需要探索的新需求数量
@@ -316,12 +307,11 @@ def run_srs_iteration(
                 logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：跳过 requirement_improver，直接执行需求探索")
             else:
                 logger.info(f"\n[后续轮次] 第 {outer_iter} 轮：先执行需求生成，再执行需求探索")
-                # 筛选积极需求
-                positive_units = [u for u in pool if u.grade is not None and u.grade > 0]
-                # 使用整个 pool 作为 negative_pool（用于避免重复和避免负分需求）
+                # 使用整个 pool 作为积极需求（用于扩展）和负样本池（用于去重）
+                positive_units = list(pool)
                 negative_pool = pool
                 
-                logger.info(f"\n[步骤 2] 发现 {len(positive_units)} 个积极需求，开始生成新需求和扩展积极需求...")
+                logger.info(f"\n[步骤 2] 当前池 {len(positive_units)} 个需求，开始生成新需求和扩展...")
                 
                 # 计算 input_tokens（用于 requirement_improver）
                 template_improver = load_prompt_template("requirement_improver")
@@ -430,42 +420,29 @@ def run_srs_iteration(
                 f.write(srs_no_clarify)
             logger.info(f"已写入 SRS 文档: {os.path.join(output_dir, 'srs_no-clarify.md')}")
 
-        # 第一轮：只对新需求评分
+        # 第一轮：新探索需求直接合并入池（不评分）
         if outer_iter == 1:
             if has_new_units:
-                # 对新需求进行评分
-                logger.info(f"\n[第一轮] 仅对新探索的需求进行评分...")
-                clarified_new_units = requirement_clarifier(buffer_new_units, d_orig)
-
-                # 更新需求池
-                pool = merge_units(pool, clarified_new_units)
+                logger.info(f"\n[第一轮] 将新探索的需求合并入池（不评分）...")
+                pool = merge_units(pool, buffer_new_units)
                 logger.info(f"需求池更新完成，当前大小: {len(pool)}")
             else:
-                logger.info("\n[步骤 3] 本轮无新需求可评分，需求池保持不变")
-        # 后续轮次：合并新生成需求和新探索需求后统一评分
+                logger.info("\n[步骤 3] 本轮无新需求，需求池保持不变")
+        # 后续轮次：合并新生成需求和新探索需求入池（不评分）
         else:
-            # requirement_explorer 和 requirement_improver 内部已经使用相似度检查去重
-            # 由于它们都检查了与 negative_pool 的相似度，而 negative_pool 包含了所有已有需求
-            # 所以 improved_units 和 explored_units 之间理论上不应该有重复
-            # 但为了保险起见，仍然记录一下
             if len(buffer_improved_units) > 0 and len(buffer_new_units) > 0:
                 logger.info(f"\n[后续轮次] 新生成需求: {len(buffer_improved_units)}, 新探索需求: {len(buffer_new_units)}（已在各自迭代过程中进行相似度去重）")
             
-            # 合并新生成需求和新探索需求
             all_new_units = buffer_improved_units + buffer_new_units
             
             if len(all_new_units) > 0:
-                # 统一对合并后的需求进行评分
-                logger.info(f"\n[后续轮次] 合并新生成需求和新探索需求后统一评分（新生成需求: {len(buffer_improved_units)}, 新探索需求: {len(buffer_new_units)}）...")
-                clarified_all_units = requirement_clarifier(all_new_units, d_orig)
-
-                # 更新需求池
-                pool = merge_units(pool, clarified_all_units)
+                logger.info(f"\n[后续轮次] 合并新生成需求和新探索需求入池（新生成: {len(buffer_improved_units)}, 新探索: {len(buffer_new_units)}）...")
+                pool = merge_units(pool, all_new_units)
                 logger.info(f"需求池更新完成，当前大小: {len(pool)}")
             else:
-                logger.info("\n[步骤 3] 本轮无新生成需求和新探索需求可评分，需求池保持不变")
+                logger.info("\n[步骤 3] 本轮无新生成需求和新探索需求，需求池保持不变")
 
-        # 保存需求池（仅grade > 0）
+        # 保存需求池
         write_pool_to_disk(pool, str(outer_iter), output_dir)
         
         # 保存迭代统计数据

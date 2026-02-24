@@ -4,6 +4,7 @@
 生成Excel数据表（每个迭代一个sheet）
 """
 
+import argparse
 import json
 import re
 import os
@@ -1238,11 +1239,31 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
     print(f"Excel文件已保存到: {output_path}，共 {len(all_data)} 个迭代的统计数据")
 
 
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="统计每个文档的检查项数量、每个迭代生成文档使用的有效需求单元数量、检查项通过数，并生成 Excel 数据表"
+    )
+    parser.add_argument(
+        "--eval-reports-dir",
+        type=Path,
+        default=Path("/root/project/srs/srs-gen2/eval_reports/minimal_en_iter8_merge_passes_1judge_pass_Loose2"),
+        help="评估报告目录（内含各文档的 _evaluation.md 等）",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("/root/project/srs/srs-gen2/output/minimal_en_iter8/"),
+        help="生成输出目录（内含各文档的 iter* 子目录、all_iter_stats.json 等）",
+    )
+    return parser.parse_args()
+
+
 def main():
     """主函数"""
-    # 设置路径
-    eval_reports_dir = Path("/root/project/srs/srs-gen2/eval_reports/minimal_en_iter8_merge_passes_1judge_pass_Loose2")
-    output_dir = Path("/root/project/srs/srs-gen2/output/minimal_en_iter8/")
+    args = parse_args()
+    eval_reports_dir = args.eval_reports_dir
+    output_dir = args.output_dir
     source_excel_path = eval_reports_dir / "数据汇总v2.xlsx"
     output_excel = eval_reports_dir / "数据汇总v3.xlsx"
     

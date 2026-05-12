@@ -399,29 +399,35 @@ def collect_statistics_for_iter(
         d_base_md = d_base_dir / f"{doc_name}_evaluation.md"
         check_item_count = get_check_item_count_from_eval_md(d_base_md) if d_base_md.exists() else None
         
-        # 2. 有效需求单元数量（从pool_iter_{iter_num}的txt文件读取）
+        # 2. 有效需求单元数量：优先从 all_iter_stats 的澄清结果读取，否则从 pool_iter_{iter_num} 的 txt 文件行数读取
         units_txt = units_dir / f"{doc_name}.txt"
-        semantic_units_count = count_semantic_units(units_txt) if units_txt.exists() else None
-        
-        # 3. SRS检查项通过数（从srs_iter_{iter_num}评估报告）
-        srs_iter_md = srs_iter_dir / f"{doc_name}_evaluation.md"
-        srs_passed_count = count_passed_check_items(srs_iter_md) if srs_iter_md.exists() else None
-        
-        # 4. 需求池数量（从每个文档的all_iter_stats.json读取）
+        semantic_units_count_fallback = count_semantic_units(units_txt) if units_txt.exists() else None
+
+        # 4. 需求池数量与澄清结果（从每个文档的 all_iter_stats.json 读取）
         pool_size = None
-        # 尝试从该文档的输出目录读取统计文件
+        valid_semantic_units_count = None
         doc_stats_file = output_dir / doc_name / "all_iter_stats.json"
         doc_stats = load_iter_stats(doc_stats_file)
         if doc_stats and "iterations" in doc_stats:
             iter_stats = doc_stats["iterations"].get(str(iter_num))
-            if iter_stats and "pool_size" in iter_stats:
-                pool_size = iter_stats["pool_size"]
-        
+            if iter_stats:
+                if "pool_size" in iter_stats:
+                    pool_size = iter_stats["pool_size"]
+                if "valid_semantic_units_count" in iter_stats:
+                    valid_semantic_units_count = iter_stats["valid_semantic_units_count"]
+
+        # 有效需求单元数量：澄清结果优先，否则用 txt 行数
+        semantic_units_count = valid_semantic_units_count if valid_semantic_units_count is not None else semantic_units_count_fallback
+
+        # 3. SRS检查项通过数（从srs_iter_{iter_num}评估报告）
+        srs_iter_md = srs_iter_dir / f"{doc_name}_evaluation.md"
+        srs_passed_count = count_passed_check_items(srs_iter_md) if srs_iter_md.exists() else None
+
         # 5. 语义单元检查项通过数（从pool_iter_{iter_num}评估报告）
         units_eval_md = units_eval_dir / f"{doc_name}_evaluation.md"
         units_passed_count = count_passed_check_items(units_eval_md) if units_eval_md.exists() else None
-        
-        # 6. 无效需求率 = (需求池数量 - 有效需求单元数量) / 需求池数量 * 100
+
+        # 6. 无效需求率 = (需求池数量 - 有效需求单元数量) / 需求池数量 * 100（有效数优先来自澄清评分）
         invalid_rate = None
         if pool_size is not None and pool_size > 0 and semantic_units_count is not None:
             invalid_rate = (pool_size - semantic_units_count) / pool_size * 100
@@ -972,7 +978,7 @@ def create_weight_config_sheet(
     }
     
     # 缩放系数
-    scale_factor = 2.0
+    scale_factor = 1.0
     
     # 创建sheet
     sheet_name = "Weight Configuration"
@@ -1089,6 +1095,17 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
         cell.font = header_font
         cell.alignment = header_alignment
     
+    # 先写入 d_base 的平均无效需求率（若有）
+    if special_versions_data:
+        for version_key in ["d_base"]:
+            data = special_versions_data.get(version_key) or []
+            invalid_rates = [d["invalid_rate"] for d in data if d.get("invalid_rate") is not None]
+            if invalid_rates:
+                avg_rate = sum(invalid_rates) / len(invalid_rates)
+                summary_ws.append([version_key, round(avg_rate, 2)])
+            else:
+                summary_ws.append([version_key, None])
+    
     # 计算并写入各迭代的无效需求率平均值
     for iter_num in sorted(all_data.keys()):
         data = all_data[iter_num]
@@ -1100,7 +1117,7 @@ def save_to_excel(all_data: Dict[int, List[Dict]], output_path: Path, eval_repor
             summary_ws.append([iter_num, None])
     
     # 设置汇总sheet列宽和对齐
-    summary_ws.column_dimensions['A'].width = 15  # 迭代编号
+    summary_ws.column_dimensions['A'].width = 22  # 版本/迭代编号
     summary_ws.column_dimensions['B'].width = 20  # 无效需求率平均值
     for row in summary_ws.iter_rows(min_row=2, max_row=summary_ws.max_row):
         for col_idx in [1, 2]:  # A, B列

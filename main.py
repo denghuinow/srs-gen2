@@ -11,6 +11,7 @@ from srs_pipeline import (
     split_to_semantic_units,
     requirement_explorer,
     requirement_improver,
+    requirement_clarifier,
     srs_generator,
 )
 from utils.token_counter import count_tokens
@@ -167,12 +168,16 @@ def save_iteration_stats(
     pool_size = len(pool)
     semantic_units_count = len(pool)
     new_units_count = len(buffer_new_units)
-    
+    valid_semantic_units_count = len([u for u in pool if u.grade is not None and u.grade > 0])
+    invalid_rate = (pool_size - valid_semantic_units_count) / pool_size * 100 if pool_size > 0 else None
+
     # 构建统计数据
     stats = {
         "iter_num": iter_num,
         "pool_size": pool_size,
         "semantic_units_count": semantic_units_count,
+        "valid_semantic_units_count": valid_semantic_units_count,
+        "invalid_rate": invalid_rate,
         "new_units_count": new_units_count,
         "improved_units_count": improved_units_count,
     }
@@ -267,8 +272,9 @@ def run_srs_iteration(
         f.write(srs_no_explore_clarify)
     logger.info(f"已写入 SRS 文档: {os.path.join(output_dir, 'srs_no-explore-clarify.md')}")
 
-    logger.info("\n[步骤 2] 初始化需求池（基线单元直接入池，不评分）...")
+    logger.info("\n[步骤 2] 初始化需求池（基线单元入池后进行澄清评分，用于统计 Invalid Rate）...")
     pool = merge_units([], baseline_units)
+    pool = requirement_clarifier(pool, d_base)
     logger.info(f"需求池初始化完成，当前大小: {len(pool)}")
 
     # 计算每轮需要探索的新需求数量
@@ -420,15 +426,16 @@ def run_srs_iteration(
                 f.write(srs_no_clarify)
             logger.info(f"已写入 SRS 文档: {os.path.join(output_dir, 'srs_no-clarify.md')}")
 
-        # 第一轮：新探索需求直接合并入池（不评分）
+        # 第一轮：仅对新探索需求评分，再合并入池
         if outer_iter == 1:
             if has_new_units:
-                logger.info(f"\n[第一轮] 将新探索的需求合并入池（不评分）...")
-                pool = merge_units(pool, buffer_new_units)
+                logger.info(f"\n[第一轮] 仅对新探索的需求进行评分并合并入池...")
+                clarified_new_units = requirement_clarifier(buffer_new_units, d_base)
+                pool = merge_units(pool, clarified_new_units)
                 logger.info(f"需求池更新完成，当前大小: {len(pool)}")
             else:
                 logger.info("\n[步骤 3] 本轮无新需求，需求池保持不变")
-        # 后续轮次：合并新生成需求和新探索需求入池（不评分）
+        # 后续轮次：仅对当轮新增（新生成+新探索）评分，再合并入池
         else:
             if len(buffer_improved_units) > 0 and len(buffer_new_units) > 0:
                 logger.info(f"\n[后续轮次] 新生成需求: {len(buffer_improved_units)}, 新探索需求: {len(buffer_new_units)}（已在各自迭代过程中进行相似度去重）")
@@ -436,15 +443,23 @@ def run_srs_iteration(
             all_new_units = buffer_improved_units + buffer_new_units
             
             if len(all_new_units) > 0:
-                logger.info(f"\n[后续轮次] 合并新生成需求和新探索需求入池（新生成: {len(buffer_improved_units)}, 新探索: {len(buffer_new_units)}）...")
-                pool = merge_units(pool, all_new_units)
+                logger.info(f"\n[后续轮次] 合并新生成需求和新探索需求后统一评分并合并入池（新生成: {len(buffer_improved_units)}, 新探索: {len(buffer_new_units)}）...")
+                clarified_all_units = requirement_clarifier(all_new_units, d_base)
+                pool = merge_units(pool, clarified_all_units)
                 logger.info(f"需求池更新完成，当前大小: {len(pool)}")
             else:
                 logger.info("\n[步骤 3] 本轮无新生成需求和新探索需求，需求池保持不变")
 
         # 保存需求池
         write_pool_to_disk(pool, str(outer_iter), output_dir)
-        
+
+        # 统计当前池评分分布（用于 Invalid Rate 等，不再对整池调用 LLM）
+        grade_dist = {}
+        for unit in pool:
+            g = unit.grade
+            grade_dist[g] = grade_dist.get(g, 0) + 1
+        logger.info(f"第 {outer_iter} 轮迭代评分完成，分布: {grade_dist}")
+
         # 保存迭代统计数据
         save_iteration_stats(
             output_dir,
